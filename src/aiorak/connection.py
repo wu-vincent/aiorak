@@ -33,6 +33,19 @@ def is_offline_message(data: memoryview) -> bool:
     return data[offset : offset + 16] == constants.OFFLINE_MESSAGE_DATA_ID
 
 
+def is_user_message(data: memoryview) -> bool:
+    return data[0] not in {
+        constants.ID_CONNECTION_REQUEST,
+        constants.ID_NEW_INCOMING_CONNECTION,
+        constants.ID_CONNECTED_PONG,
+        constants.ID_CONNECTED_PING,
+        constants.ID_DISCONNECTION_NOTIFICATION,
+        constants.ID_DETECT_LOST_CONNECTIONS,
+        constants.ID_INVALID_PASSWORD,
+        constants.ID_CONNECTION_REQUEST_ACCEPTED,
+    }
+
+
 class Connection(asyncio.DatagramProtocol):
     # TODO: send, recv, keep alive, timeout
 
@@ -41,6 +54,7 @@ class Connection(asyncio.DatagramProtocol):
         self.transport: asyncio.DatagramTransport | None = None
         self.reliability: ReliabilityLayer | None = None
         self.connect_future = self.loop.create_future()
+        self.recv_queue: asyncio.Queue[Message] = asyncio.Queue()
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
@@ -53,16 +67,24 @@ class Connection(asyncio.DatagramProtocol):
         offline_msg = is_offline_message(view)
         if offline_msg:
             self.handle_offline_message(view, addr)
-        else:
-            results = self.reliability.handle_datagram(view, addr)
-            if results is None:
-                return
+            return
 
-            for data, reliability in results:
-                self.handle_connected_message(memoryview(data), addr, reliability)
+        messages = self.reliability.handle_datagram(view, addr)
+        if messages is None:
+            return
+
+        for message in messages:
+            view = memoryview(message.data)
+            if is_user_message(view):
+                self.recv_queue.put_nowait(message)
+            else:
+                self.handle_connected_message(view, addr)
+
+    async def receive(self) -> tuple[bytes, Reliability]:
+        return await self.recv_queue.get()
 
     def handle_offline_message(self, data: memoryview, addr: tuple[str, int]) -> None:
         raise NotImplementedError
 
-    def handle_connected_message(self, data: memoryview, addr: tuple[str, int], reliability: Reliability) -> None:
+    def handle_connected_message(self, data: memoryview, addr: tuple[str, int]) -> None:
         raise NotImplementedError

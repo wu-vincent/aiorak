@@ -70,8 +70,8 @@ class ClientConnection(Connection):
 
         return True
 
-    def handle_connected_message(self, data: memoryview, addr: tuple[str, int], reliability: Reliability) -> None:
-        print(data.hex(sep=" "), addr, reliability)
+    def handle_connected_message(self, data: memoryview, addr: tuple[str, int]) -> None:
+        print(data.hex(sep=" "), addr)
 
     def _handle_open_connection_reply_1(self, data: memoryview, addr: tuple[str, int]) -> None:
         if self._open_future.done():

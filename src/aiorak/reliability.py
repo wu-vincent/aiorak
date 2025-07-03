@@ -306,7 +306,7 @@ class ReliabilityLayer:
             self._bandwidth_exceeded = True
             self._flush_handle = self.loop.call_later(0.01, self.flush, transport)
 
-    def handle_datagram(self, data: memoryview, addr: tuple[str, int]) -> list[tuple[bytes, Reliability]]:
+    def handle_datagram(self, data: memoryview, addr: tuple[str, int]) -> list[Message]:
         stream = ByteStream(data)
         header = DatagramHeader.from_stream(stream)
 
@@ -328,7 +328,7 @@ class ReliabilityLayer:
         results = []
         while stream.readable_bytes > 0:
             message = Message.from_stream(stream)
-            results.append((message.data, message.reliability))
+            results.append(message)
         return results
 
     @property
