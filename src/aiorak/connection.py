@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from aiorak.reliability import Reliability, ReliabilityLayer
+from aiorak.stream import ByteStream
 
 from . import constants
 from .reliability import Message
@@ -89,6 +90,7 @@ class Connection(asyncio.DatagramProtocol):
         for message in messages:
             view = memoryview(message.data)
             if is_user_message(view):
+                print(message.data.hex(sep=" "))
                 self.recv_queue.put_nowait(message)
             else:
                 self.handle_connected_message(view, addr)
@@ -97,14 +99,26 @@ class Connection(asyncio.DatagramProtocol):
         pass
 
     async def receive(self) -> tuple[bytes, Reliability]:
-        return await self.recv_queue.get()
+        message = await self.recv_queue.get()
+        return message.data, message.reliability
 
     def handle_offline_message(self, data: memoryview, addr: tuple[str, int]) -> None:
         raise NotImplementedError
 
     def handle_connected_message(self, data: memoryview, addr: tuple[str, int]) -> None:
-        # TODO: handling ping, pong
-        pass
+        match data[0]:
+            case constants.ID_CONNECTED_PING:
+                stream = ByteStream(data)
+                stream.skip_bytes(1)
+                ping_time = stream.read_long()
+
+                out = ByteStream()
+                out.write_byte(constants.ID_CONNECTED_PONG)
+                out.write_long(ping_time)
+                out.write_long(int(self.loop.time() * 1000))
+                self.send(out.data, reliable=False)
+            case _:
+                pass
 
     def _fill_local_addr(self) -> None:
         self.local_addr = [("0.0.0.0", 0)] * constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS
