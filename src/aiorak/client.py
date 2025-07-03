@@ -110,7 +110,7 @@ class ClientConnection(Connection):
         out.write_long(self.guid)
         out.write_long(int(self.loop.time() * 1000))
         out.write_bool(False)  # security
-        self.reliability = ReliabilityLayer(mtu_size)
+        self.reliability = ReliabilityLayer(addr, mtu_size)
         self.reliability.send(self.transport, out.data, reliable=True)
 
 
