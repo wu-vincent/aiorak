@@ -1,6 +1,8 @@
 import asyncio
 import logging
 
+from aiorak.reliability import ReliabilityLayer
+
 logger = logging.getLogger("aiorak.connection")
 from . import constants
 
@@ -35,6 +37,7 @@ class Connection(asyncio.DatagramProtocol):
     def __init__(self):
         self.loop = asyncio.get_event_loop()
         self.transport: asyncio.DatagramTransport | None = None
+        self.reliability: ReliabilityLayer | None = None
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport

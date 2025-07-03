@@ -45,8 +45,8 @@ class ByteStream:
     def data(self) -> memoryview:
         buf = self._buffer
         if isinstance(buf, memoryview):
-            return buf[self._read_pos:]
-        return memoryview(buf)[self._read_pos:]
+            return buf[self._read_pos :]
+        return memoryview(buf)[self._read_pos :]
 
     def write(self, data: Union[bytes, bytearray, memoryview]) -> None:
         if self._using_view:
@@ -103,7 +103,7 @@ class ByteStream:
         """
         if size <= 0:
             raise ValueError("size must be a positive integer")
-        buf = memoryview(self._buffer)[self._read_pos:]
+        buf = memoryview(self._buffer)[self._read_pos :]
         mv = buf[:size]
         self._read_pos += size
         return mv

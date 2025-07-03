@@ -4,21 +4,12 @@ import uuid
 import aiorak
 from . import constants
 from .connection import Connection
-from .constants import (
-    MAXIMUM_MTU_SIZE,
-    ID_OPEN_CONNECTION_REQUEST_1,
-    ID_OPEN_CONNECTION_REPLY_1,
-    OFFLINE_MESSAGE_DATA_ID,
-    RAKNET_PROTOCOL_VERSION,
-    UDP_HEADER_SIZE,
-    ID_OPEN_CONNECTION_REQUEST_2,
-    ID_CONNECTION_REQUEST,
-)
 from .stream import ByteStream
+from .reliability import ReliabilityLayer
 
 
 class ClientConnection(Connection):
-    def __init__(self, protocol_version=RAKNET_PROTOCOL_VERSION):
+    def __init__(self, protocol_version=constants.RAKNET_PROTOCOL_VERSION):
         super().__init__()
         self._open_future = self.loop.create_future()
         self._connect_future = self.loop.create_future()
@@ -26,19 +17,19 @@ class ClientConnection(Connection):
         self._protocol_version = protocol_version
 
     async def connect(
-            self,
-            remote_addr: tuple[str, int],
-            max_mtu: int = MAXIMUM_MTU_SIZE,
-            attempt_interval=0.5,
-            timeout=10,
+        self,
+        remote_addr: tuple[str, int],
+        max_mtu: int = constants.MAXIMUM_MTU_SIZE,
+        attempt_interval=0.5,
+        timeout=10,
     ):
         await self.loop.create_datagram_endpoint(lambda: self, None, remote_addr)
         for mtu_size in [max_mtu, 1200, 576]:
             out = ByteStream()
-            out.write_byte(ID_OPEN_CONNECTION_REQUEST_1)
-            out.write(OFFLINE_MESSAGE_DATA_ID)
+            out.write_byte(constants.ID_OPEN_CONNECTION_REQUEST_1)
+            out.write(constants.OFFLINE_MESSAGE_DATA_ID)
             out.write_byte(self._protocol_version)
-            out.write(b"\x00" * (mtu_size - UDP_HEADER_SIZE))
+            out.write(b"\x00" * (mtu_size - constants.UDP_HEADER_SIZE))
 
             for attempt in range(4):
                 self.transport.sendto(out.data)
@@ -85,15 +76,15 @@ class ClientConnection(Connection):
 
         bs = ByteStream(data)
         bs.skip_bytes(1)
-        bs.skip_bytes(len(OFFLINE_MESSAGE_DATA_ID))
+        bs.skip_bytes(len(constants.OFFLINE_MESSAGE_DATA_ID))
         bs.skip_bytes(8)  # server guid
         has_security = bs.read_bool()
         mtu_size = bs.read_short()
         assert has_security is False, "Security is not supported yet"
 
         out = ByteStream()
-        out.write_byte(ID_OPEN_CONNECTION_REQUEST_2)
-        out.write(OFFLINE_MESSAGE_DATA_ID)
+        out.write_byte(constants.ID_OPEN_CONNECTION_REQUEST_2)
+        out.write(constants.OFFLINE_MESSAGE_DATA_ID)
         out.write_bool(has_security)
         out.write_address(addr)
         out.write_short(mtu_size)
@@ -103,7 +94,7 @@ class ClientConnection(Connection):
     def _handle_open_connection_reply_2(self, data: memoryview, addr: tuple[str, int]) -> None:
         bs = ByteStream(data)
         bs.skip_bytes(1)
-        bs.skip_bytes(len(OFFLINE_MESSAGE_DATA_ID))
+        bs.skip_bytes(len(constants.OFFLINE_MESSAGE_DATA_ID))
         sever_guid = bs.read_long()
         client_addr = bs.read_address()
         mtu_size = bs.read_short()
@@ -111,11 +102,12 @@ class ClientConnection(Connection):
         assert do_security is False, "Security is not supported yet"
 
         out = ByteStream()
-        out.write_byte(ID_CONNECTION_REQUEST)
+        out.write_byte(constants.ID_CONNECTION_REQUEST)
         out.write_long(self.guid)
         out.write_long(int(self.loop.time() * 1000))
         out.write_bool(False)  # security
-        self.send(out.data, reliable=True)
+        self.reliability = ReliabilityLayer(mtu_size)
+        self.reliability.send(out.data, reliable=True)
 
 
 async def connect(host: str, port: int, **kwargs) -> ClientConnection:
