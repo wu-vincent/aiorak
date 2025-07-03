@@ -65,6 +65,7 @@ class Connection(asyncio.DatagramProtocol):
         self._fill_local_addr()
         self._ping: deque[float] = deque(maxlen=5)
         self._lowest_ping: float = None
+        self._keep_alive_handle: asyncio.TimerHandle | None = None
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
@@ -116,11 +117,14 @@ class Connection(asyncio.DatagramProtocol):
             immediate=immediate,
         )
 
+        if self.connect_future.done() and reliable:
+            self._keep_alive_handle = self.loop.call_later(self.timeout / 2, self._keep_alive)
+
     async def receive(self) -> tuple[bytes, Reliability]:
         message = await self.recv_queue.get()
         return message.data, message.reliability
 
-    def ping(self, addr: tuple[str, int], *, reliable: bool = False, immediate: bool = False) -> None:
+    def ping(self, *, reliable: bool = False, immediate: bool = False) -> None:
         if self.reliability is None:
             return
 
@@ -169,3 +173,14 @@ class Connection(asyncio.DatagramProtocol):
                 i += 1
                 if i >= constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS:
                     break
+
+    def _keep_alive(self) -> None:
+        # If no reliable packets are waiting for an ack, do a one byte reliable send so that disconnections are
+        if not self.reliability._resend_queue:
+            self.ping(reliable=True, immediate=True)
+
+        self._keep_alive_handle = self.loop.call_later(self.timeout / 2, self._keep_alive)
+
+    @property
+    def timeout(self):
+        return 10.0
