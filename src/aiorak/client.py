@@ -22,6 +22,7 @@ class ClientConnection(Connection):
         attempt_interval=0.5,
         timeout=10,
     ):
+        self.state = Connection.State.CONNECTING
         await self.loop.create_datagram_endpoint(lambda: self, None, remote_addr)
         for mtu_size in [max_mtu, 1200, 576]:
             out = ByteStream()
@@ -41,6 +42,7 @@ class ClientConnection(Connection):
                     continue
 
         await asyncio.wait_for(self.connect_future, timeout=timeout)
+        self.state = Connection.State.CONNECTED
 
     def handle_offline_message(self, data: memoryview, addr: tuple[str, int]) -> bool:
         connection_errors = {
@@ -144,7 +146,7 @@ class ClientConnection(Connection):
         out.write_long(int(self.loop.time() * 1000))
         self.reliability.send(out.data, reliable=True, ordered=True)
 
-        self.ping(addr, immediate=True)
+        self.ping(immediate=True)
 
 
 async def connect(host: str, port: int, **kwargs) -> ClientConnection:

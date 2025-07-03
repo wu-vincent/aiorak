@@ -50,6 +50,10 @@ def is_user_message(data: memoryview) -> bool:
     }
 
 
+class State(enum.IntEnum):
+    INVALID, CONNECTING, CONNECTED, DISCONNECTING, DISCONNECTED = range(4)
+
+
 class Connection(asyncio.DatagramProtocol):
     # TODO: timeout
 
@@ -58,6 +62,7 @@ class Connection(asyncio.DatagramProtocol):
         self.transport: asyncio.DatagramTransport | None = None
         self.reliability: ReliabilityLayer | None = None
         self.connect_future = self.loop.create_future()
+        self.close_future = self.loop.create_future()
         self.recv_queue: asyncio.Queue[Message] = asyncio.Queue()
         self.external_addr: tuple[str, int] | None = None
         self.remote_addr: list[tuple[str, int]] = [("0.0.0.0", 0)] * constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS
@@ -66,6 +71,8 @@ class Connection(asyncio.DatagramProtocol):
         self._ping: deque[float] = deque(maxlen=5)
         self._lowest_ping: float = None
         self._keep_alive_handle: asyncio.TimerHandle | None = None
+        self._timeout_handle: asyncio.TimerHandle | None = None
+        self.state = State.INVALID
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
@@ -80,6 +87,11 @@ class Connection(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         time = self.loop.time()
+
+        if self._timeout_handle:
+            self._timeout_handle.cancel()
+        self._timeout_handle = self.loop.call_later(self.reliability.timeout, self._timeout)
+
         view = memoryview(data)
         offline_msg = is_offline_message(view)
         if offline_msg:
@@ -108,6 +120,9 @@ class Connection(asyncio.DatagramProtocol):
         channel: int = 0,
         immediate: bool = False,
     ) -> None:
+        if not self.state in {State.CONNECTING, State.CONNECTED}:
+            return
+
         self.reliability.send(
             data,
             reliable=reliable,
@@ -118,6 +133,9 @@ class Connection(asyncio.DatagramProtocol):
         )
 
         if self.connect_future.done() and reliable:
+            # Reliable sends must occur at least once every timeout /2 to notice disconnects
+            if self._keep_alive_handle:
+                self._keep_alive_handle.cancel()
             self._keep_alive_handle = self.loop.call_later(self.reliability.timeout / 2, self._keep_alive)
 
     async def receive(self) -> tuple[bytes, Reliability]:
@@ -162,6 +180,13 @@ class Connection(asyncio.DatagramProtocol):
         if self._lowest_ping == None or ping < self._lowest_ping:
             self._lowest_ping = ping
 
+    def on_disconnect(self):
+        """The remote peer closed the connection."""
+        pass
+
+    def disconnect(self):
+        pass
+
     def _fill_local_addr(self) -> None:
         self.local_addr = [("0.0.0.0", 0)] * constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS
         hostname = socket.gethostname()
@@ -181,3 +206,6 @@ class Connection(asyncio.DatagramProtocol):
             self._keep_alive_handle = self.loop.call_later(self.reliability.timeout / 2, self._keep_alive)
         else:
             self._keep_alive_handle = self.loop.call_later(0.1, self._keep_alive)
+
+    def _timeout(self) -> None:
+        self.close_future.set_exception(TimeoutError("Connection timed out"))
