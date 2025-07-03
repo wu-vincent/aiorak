@@ -19,6 +19,7 @@ class ClientConnection(Connection):
     async def connect(
         self,
         remote_addr: tuple[str, int],
+        *,
         max_mtu: int = constants.MAXIMUM_MTU_SIZE,
         attempt_interval=0.5,
         timeout=10,
@@ -92,6 +93,9 @@ class ClientConnection(Connection):
         self.transport.sendto(out.data, addr)
 
     def _handle_open_connection_reply_2(self, data: memoryview, addr: tuple[str, int]) -> None:
+        if self.reliability is not None:
+            return
+
         bs = ByteStream(data)
         bs.skip_bytes(1)
         bs.skip_bytes(len(constants.OFFLINE_MESSAGE_DATA_ID))
@@ -107,7 +111,7 @@ class ClientConnection(Connection):
         out.write_long(int(self.loop.time() * 1000))
         out.write_bool(False)  # security
         self.reliability = ReliabilityLayer(mtu_size)
-        self.reliability.send(out.data, reliable=True)
+        self.reliability.send(self.transport, out.data, reliable=True)
 
 
 async def connect(host: str, port: int, **kwargs) -> ClientConnection:

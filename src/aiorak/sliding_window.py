@@ -109,9 +109,9 @@ class SlidingWindow:
         if self.is_in_slow_start:
             self._cwnd += self.max_mtu
             if self._ss_thresh and self._cwnd > self._ss_thresh:
-                self._cwnd = self._ss_thresh + (self.max_mtu ** 2) / self._cwnd
+                self._cwnd = self._ss_thresh + (self.max_mtu**2) / self._cwnd
         elif new_block:
-            self._cwnd += (self.max_mtu ** 2) / self._cwnd
+            self._cwnd += (self.max_mtu**2) / self._cwnd
 
     def get_rto_for_retransmission(self) -> float:
         """Calculate retransmission timeout in seconds."""
