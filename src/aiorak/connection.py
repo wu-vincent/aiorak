@@ -45,7 +45,6 @@ def is_user_message(data: memoryview) -> bool:
         constants.ID_CONNECTED_PONG,
         constants.ID_CONNECTED_PING,
         constants.ID_DISCONNECTION_NOTIFICATION,
-        constants.ID_DETECT_LOST_CONNECTIONS,
         constants.ID_INVALID_PASSWORD,
         constants.ID_CONNECTION_REQUEST_ACCEPTED,
     }
@@ -146,6 +145,7 @@ class Connection(asyncio.DatagramProtocol):
                 out.write_long(ping_time)
                 out.write_long(int(self.loop.time() * 1000))
                 self.send(out.data, reliable=False)
+
             case constants.ID_CONNECTED_PONG:
                 stream = ByteStream(data)
                 stream.skip_bytes(1)
