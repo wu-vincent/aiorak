@@ -2,11 +2,11 @@ import asyncio
 import enum
 import typing
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
+from . import constants
 from .constants import NUMBER_OF_ORDERED_STREAMS
 from .sliding_window import SlidingWindow
-from . import constants
 from .stream import ByteStream
 
 
@@ -332,6 +332,9 @@ class ReliabilityLayer:
             return None
 
         skipped = self._cc.on_got_packet(header.id)
+        self._naks.update(range(header.id - skipped - 1, header.id))
+        if not self.send_acks_handle:
+            self.send_naks_handle = self.loop.call_later(0.01, self._send_naks, transport, addr)
 
         self._acks.add(header.id)
         if not self.send_acks_handle:
@@ -366,6 +369,7 @@ class ReliabilityLayer:
                 pass
 
     def _send_acks(self, transport: asyncio.DatagramTransport, addr: tuple[str, int]) -> None:
+        self.send_acks_handle = None
         if not self._acks:
             return
 
@@ -375,6 +379,18 @@ class ReliabilityLayer:
         self._write_range_list(self._acks, stream)
         transport.sendto(stream.data, addr)
         print("sending ack:", stream.data.hex(sep=" "))
+
+    def _send_acks(self, transport: asyncio.DatagramTransport, addr: tuple[str, int]) -> None:
+        self.send_naks_handle = None
+        if not self._naks:
+            return
+
+        header = DatagramHeader(is_nak=True)
+        stream = ByteStream()
+        header.write(stream)
+        self._write_range_list(self._naks, stream)
+        transport.sendto(stream.data, addr)
+        print("sending nak:", stream.data.hex(sep=" "))
 
     def _write_range_list(self, numbers: set[int], stream: ByteStream):
         seqs = sorted(int(n) for n in numbers)

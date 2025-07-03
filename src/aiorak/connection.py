@@ -1,10 +1,12 @@
 import asyncio
 import logging
 
-from aiorak.reliability import ReliabilityLayer, Reliability
+from aiorak.reliability import Reliability, ReliabilityLayer
+
+from . import constants
+from .reliability import Message
 
 logger = logging.getLogger("aiorak.connection")
-from . import constants
 
 
 def is_offline_message(data: memoryview) -> bool:

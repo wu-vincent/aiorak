@@ -1,13 +1,10 @@
 import asyncio
 import uuid
 
-import aiorak
-from aiorak.reliability import Reliability
-
 from . import constants
 from .connection import Connection
-from .stream import ByteStream
 from .reliability import ReliabilityLayer
+from .stream import ByteStream
 
 
 class ClientConnection(Connection):

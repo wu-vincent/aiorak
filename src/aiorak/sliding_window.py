@@ -63,7 +63,7 @@ class SlidingWindow:
         if datagram_id == self._expected_next_id:
             skipped = 0
         elif is_later(datagram_id, self._expected_next_id):
-            skipped = (datagram_id - expected) & self.DATAGRAM_ID_MASK
+            skipped = (datagram_id - self._expected_next_id) & self.DATAGRAM_ID_MASK
             assert skipped <= 1000, "Too many skipped packets"
         else:
             # Duplicate or out-of-order; already received
