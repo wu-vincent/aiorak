@@ -63,13 +63,14 @@ class Connection(asyncio.DatagramProtocol):
         self.transport = None
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        time = self.loop.time()
         view = memoryview(data)
         offline_msg = is_offline_message(view)
         if offline_msg:
             self.handle_offline_message(view, addr)
             return
 
-        messages = self.reliability.handle_datagram(view, addr)
+        messages = self.reliability.handle_datagram(self.transport, view, addr, time)
         if messages is None:
             return
 

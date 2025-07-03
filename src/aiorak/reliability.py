@@ -174,6 +174,10 @@ class ReliabilityLayer:
         self._unacked_bytes: int = 0
         self._datagram_history: dict[int, list[tuple[int, float]]] = {}
         self._bandwidth_exceeded = False
+        self._acks: set[int] = set()
+        self._naks: set[int] = set()
+        self.send_acks_handle: asyncio.TimerHandle | None = None
+        self.send_naks_handle: asyncio.TimerHandle | None = None
 
     def send(
         self,
@@ -306,30 +310,104 @@ class ReliabilityLayer:
             self._bandwidth_exceeded = True
             self._flush_handle = self.loop.call_later(0.01, self.flush, transport)
 
-    def handle_datagram(self, data: memoryview, addr: tuple[str, int]) -> list[Message]:
+    def handle_datagram(
+        self, transport: asyncio.DatagramTransport, data: memoryview, addr: tuple[str, int], time: float
+    ) -> list[Message]:
         stream = ByteStream(data)
         header = DatagramHeader.from_stream(stream)
 
         if header.is_ack or header.is_nak:
-            message_ids = []
+            message_ids = set()
             for _ in range(stream.read_short()):
                 singleton = stream.read_bool()
                 min_value = stream.read_medium(endian="little")
                 max_value = stream.read_medium(endian="little") if not singleton else min_value
-                message_ids.extend(range(min_value, max_value + 1))
+                message_ids.update(range(min_value, max_value + 1))
 
             if header.is_ack:
-                print("ACKed:", message_ids)
+                self.handle_ack(sorted(message_ids), time)
             else:
-                print("NAKed:", message_ids)
+                self.handle_nak(sorted(message_ids))
 
             return None
+
+        skipped = self._cc.on_got_packet(header.id)
+
+        self._acks.add(header.id)
+        if not self.send_acks_handle:
+            self.send_acks_handle = self.loop.call_later(0.01, self._send_acks, transport, addr)
 
         results = []
         while stream.readable_bytes > 0:
             message = Message.from_stream(stream)
             results.append(message)
         return results
+
+    def handle_ack(self, datagram_ids: list[int], time: float) -> None:
+        for datagram_id in datagram_ids:
+            history = self._datagram_history.pop(datagram_id, None)
+            if not history:
+                continue
+
+            for message_number, send_time in history:
+                rtt = max(0, time - send_time)
+                self._cc.on_ack(rtt, self._bandwidth_exceeded, datagram_id)
+                # TODO: remove packet from resend list
+                # TODO: delete older reliable sequenced
+
+    def handle_nak(self, datagram_ids: list[int]) -> None:
+        for datagram_id in datagram_ids:
+            history = self._datagram_history.pop(datagram_id, None)
+            if not history:
+                continue
+
+            for message_number, _ in history:
+                # TODO: add each message to the resend buffer immediately, and call_later resend
+                pass
+
+    def _send_acks(self, transport: asyncio.DatagramTransport, addr: tuple[str, int]) -> None:
+        if not self._acks:
+            return
+
+        header = DatagramHeader(is_ack=True)
+        stream = ByteStream()
+        header.write(stream)
+        self._write_range_list(self._acks, stream)
+        transport.sendto(stream.data, addr)
+        print("sending ack:", stream.data.hex(sep=" "))
+
+    def _write_range_list(self, numbers: set[int], stream: ByteStream):
+        seqs = sorted(int(n) for n in numbers)
+        ranges: list[tuple[int, int]] = []
+        start = prev = seqs[0]
+        for n in seqs[1:]:
+            if n == prev + 1:
+                prev = n  # extend current range
+            else:
+                ranges.append((start, prev))
+                start = prev = n
+
+        ranges.append((start, prev))
+
+        temp = ByteStream()
+        count = 0
+        bytes_written = 0
+        for min_value, max_value in ranges:
+            if bytes_written + 9 > self.max_datagram_size:
+                break
+
+            temp.write_bool(min_value == max_value)
+            temp.write_medium(min_value, endian="little")
+            bytes_written += 4
+            if min_value != max_value:
+                temp.write_medium(max_value, endian="little")
+                bytes_written += 3
+            count += 1
+            for i in range(min_value, max_value + 1):
+                numbers.remove(i)
+
+        stream.write_short(count)
+        stream.write(temp.data)
 
     @property
     def max_datagram_size(self) -> int:
