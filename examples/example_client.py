@@ -1,7 +1,6 @@
 import asyncio
 
 from aiorak.client import connect
-from aiorak.stream import ByteStream
 
 
 async def main():

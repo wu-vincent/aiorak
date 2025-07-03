@@ -85,7 +85,7 @@ class Connection(asyncio.DatagramProtocol):
             self.handle_offline_message(view, addr)
             return
 
-        messages = self.reliability.handle_datagram(self.transport, view, addr, time)
+        messages = self.reliability.handle_datagram(view, addr, time)
         if messages is None:
             return
 
@@ -108,7 +108,6 @@ class Connection(asyncio.DatagramProtocol):
         immediate: bool = False,
     ) -> None:
         self.reliability.send(
-            self.transport,
             data,
             reliable=reliable,
             ordered=ordered,

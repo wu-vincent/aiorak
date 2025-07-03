@@ -114,8 +114,8 @@ class ClientConnection(Connection):
         out.write_long(self.guid)
         out.write_long(int(self.loop.time() * 1000))
         out.write_bool(False)  # security
-        self.reliability = ReliabilityLayer(addr, mtu_size)
-        self.reliability.send(self.transport, out.data, reliable=True)
+        self.reliability = ReliabilityLayer(self.transport, addr, mtu_size)
+        self.reliability.send(out.data, reliable=True)
 
     def _handle_connection_request_accepted(self, data: memoryview, addr: tuple[str, int]) -> None:
         if self.connect_future.done():
@@ -140,7 +140,7 @@ class ClientConnection(Connection):
             out.write_address(self.local_addr[i])
         out.write_long(pong_time)
         out.write_long(int(self.loop.time() * 1000))
-        self.reliability.send(self.transport, out.data, reliable=True, ordered=True)
+        self.reliability.send(out.data, reliable=True, ordered=True)
 
         self.ping(addr, immediate=True)
 

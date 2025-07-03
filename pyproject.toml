@@ -8,9 +8,9 @@ version = "0.1.0"
 dependencies = [
     "asyncio"
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 authors = [
-    { name = "Zhengyu Wu", email = "magicdroidx@gmail.com" },
+    { name = "Vincent Wu", email = "magicdroidx@gmail.com" },
 ]
 description = "RakNet implementation for Python using asyncio"
 readme = "README.md"
