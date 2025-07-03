@@ -178,8 +178,9 @@ class Connection(asyncio.DatagramProtocol):
         # If no reliable packets are waiting for an ack, do a one byte reliable send so that disconnections are
         if not self.reliability._resend_queue:
             self.ping(reliable=True, immediate=True)
-
-        self._keep_alive_handle = self.loop.call_later(self.timeout / 2, self._keep_alive)
+            self._keep_alive_handle = self.loop.call_later(self.timeout / 2, self._keep_alive)
+        else:
+            self._keep_alive_handle = self.loop.call_later(0.1, self._keep_alive)
 
     @property
     def timeout(self):
