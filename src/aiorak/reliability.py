@@ -188,6 +188,7 @@ class ReliabilityLayer:
         ordered: bool = False,
         sequenced: bool = False,
         channel: int = 0,
+        immediate: bool = False,
     ) -> None:
         assert 0 <= channel < constants.NUMBER_OF_ORDERED_STREAMS, "Invalid channel"
         assert len(data) > 0, "Data is empty"
@@ -207,6 +208,7 @@ class ReliabilityLayer:
         ordered: bool = False,
         sequenced: bool = False,
         channel: int = 0,
+        immediate: bool = False,
     ):
         message = Message(data=data, reliability=Reliability.from_flags(reliable, ordered, sequenced), channel=channel)
         if sequenced:
@@ -218,7 +220,9 @@ class ReliabilityLayer:
 
         self._send_queue.append(message)
 
-        if self._flush_handle is None:
+        if immediate:
+            self.flush(transport)
+        elif self._flush_handle is None:
             self._flush_handle = self.loop.call_later(0.01, self.flush, transport)
 
     def _send_split(
@@ -302,6 +306,7 @@ class ReliabilityLayer:
                 if message.reliability.reliable:
                     self._datagram_history.setdefault(header.id, []).append((message.reliable_id, time))
 
+            print("reliability send", stream.data.hex(sep=" "))
             transport.sendto(stream.data, self._remote_addr)
 
         # bandwidth is exceeded, flush one more time later
@@ -344,6 +349,7 @@ class ReliabilityLayer:
         while stream.readable_bytes > 0:
             message = Message.from_stream(stream)
             results.append(message)
+
         return results
 
     def handle_ack(self, datagram_ids: list[int], time: float) -> None:
@@ -378,7 +384,6 @@ class ReliabilityLayer:
         header.write(stream)
         self._write_range_list(self._acks, stream)
         transport.sendto(stream.data, addr)
-        print("sending ack:", stream.data.hex(sep=" "))
 
     def _send_naks(self, transport: asyncio.DatagramTransport, addr: tuple[str, int]) -> None:
         self.send_naks_handle = None

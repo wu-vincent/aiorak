@@ -1,12 +1,13 @@
 import asyncio
 import logging
+import socket
+from collections import deque
 
 from aiorak.reliability import Reliability, ReliabilityLayer
 from aiorak.stream import ByteStream
 
 from . import constants
 from .reliability import Message
-import socket
 
 logger = logging.getLogger("aiorak.connection")
 
@@ -51,7 +52,7 @@ def is_user_message(data: memoryview) -> bool:
 
 
 class Connection(asyncio.DatagramProtocol):
-    # TODO: send, recv, keep alive, timeout
+    # TODO: keep alive, timeout
 
     def __init__(self):
         self.loop = asyncio.get_event_loop()
@@ -63,6 +64,8 @@ class Connection(asyncio.DatagramProtocol):
         self.remote_addr: list[tuple[str, int]] = [("0.0.0.0", 0)] * constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS
         self.local_addr: list[tuple[str, int]]
         self._fill_local_addr()
+        self._ping: deque[float] = deque(maxlen=5)
+        self._lowest_ping: float = None
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
@@ -95,12 +98,38 @@ class Connection(asyncio.DatagramProtocol):
             else:
                 self.handle_connected_message(view, addr)
 
-    def on_connected_pong(self, ping_time: float, pong_time: float) -> None:
-        pass
+    def send(
+        self,
+        data: bytes | memoryview,
+        *,
+        reliable: bool,
+        ordered: bool = False,
+        sequenced: bool = False,
+        channel: int = 0,
+        immediate: bool = False,
+    ) -> None:
+        self.reliability.send(
+            self.transport,
+            data,
+            reliable=reliable,
+            ordered=ordered,
+            sequenced=sequenced,
+            channel=channel,
+            immediate=immediate,
+        )
 
     async def receive(self) -> tuple[bytes, Reliability]:
         message = await self.recv_queue.get()
         return message.data, message.reliability
+
+    def ping(self, addr: tuple[str, int], *, reliable: bool = False, immediate: bool = False) -> None:
+        if self.reliability is None:
+            return
+
+        stream = ByteStream()
+        stream.write_byte(constants.ID_CONNECTED_PING)
+        stream.write_long(int(self.loop.time() * 1000))
+        self.send(stream.data, reliable=reliable, immediate=immediate)
 
     def handle_offline_message(self, data: memoryview, addr: tuple[str, int]) -> None:
         raise NotImplementedError
@@ -117,8 +146,18 @@ class Connection(asyncio.DatagramProtocol):
                 out.write_long(ping_time)
                 out.write_long(int(self.loop.time() * 1000))
                 self.send(out.data, reliable=False)
-            case _:
-                pass
+            case constants.ID_CONNECTED_PONG:
+                stream = ByteStream(data)
+                stream.skip_bytes(1)
+                ping_time = stream.read_long()
+                pong_time = stream.read_long()
+                self.on_connected_pong(ping_time / 1000.0, pong_time / 1000.0)
+
+    def on_connected_pong(self, ping_time: float, pong_time: float) -> None:
+        ping = max(0, self.loop.time() - ping_time)
+        self._ping.append(ping)
+        if self._lowest_ping == None or ping < self._lowest_ping:
+            self._lowest_ping = ping
 
     def _fill_local_addr(self) -> None:
         self.local_addr = [("0.0.0.0", 0)] * constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS
@@ -131,6 +170,3 @@ class Connection(asyncio.DatagramProtocol):
                 i += 1
                 if i >= constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS:
                     break
-
-    def ping(self, addr: tuple[str, int], *, immediate: bool = False) -> None:
-        pass

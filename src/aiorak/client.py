@@ -144,19 +144,6 @@ class ClientConnection(Connection):
 
         self.ping(addr, immediate=True)
 
-    def send(
-        self,
-        data: bytes | memoryview,
-        *,
-        reliable: bool,
-        ordered: bool = False,
-        sequenced: bool = False,
-        channel: int = 0,
-    ) -> None:
-        self.reliability.send(
-            self.transport, data, reliable=reliable, ordered=ordered, sequenced=sequenced, channel=channel
-        )
-
 
 async def connect(host: str, port: int, **kwargs) -> ClientConnection:
     client = ClientConnection(**kwargs)
