@@ -72,6 +72,8 @@ class ClientConnection(Connection):
         match data[0]:
             case constants.ID_CONNECTION_REQUEST_ACCEPTED:
                 self._handle_connection_request_accepted(data, addr)
+            case constants.ID_INVALID_PASSWORD:
+                self.connect_future.set_exception(ConnectionRefusedError("Invalid password"))
 
     def _handle_open_connection_reply_1(self, data: memoryview, addr: tuple[str, int]) -> None:
         if self._open_future.done():

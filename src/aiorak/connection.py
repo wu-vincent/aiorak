@@ -51,7 +51,7 @@ def is_user_message(data: memoryview) -> bool:
 
 
 class Connection(asyncio.DatagramProtocol):
-    # TODO: keep alive, timeout
+    # TODO: timeout
 
     def __init__(self):
         self.loop = asyncio.get_event_loop()
@@ -118,7 +118,7 @@ class Connection(asyncio.DatagramProtocol):
         )
 
         if self.connect_future.done() and reliable:
-            self._keep_alive_handle = self.loop.call_later(self.timeout / 2, self._keep_alive)
+            self._keep_alive_handle = self.loop.call_later(self.reliability.timeout / 2, self._keep_alive)
 
     async def receive(self) -> tuple[bytes, Reliability]:
         message = await self.recv_queue.get()
@@ -178,10 +178,6 @@ class Connection(asyncio.DatagramProtocol):
         # If no reliable packets are waiting for an ack, do a one byte reliable send so that disconnections are
         if not self.reliability._resend_queue:
             self.ping(reliable=True, immediate=True)
-            self._keep_alive_handle = self.loop.call_later(self.timeout / 2, self._keep_alive)
+            self._keep_alive_handle = self.loop.call_later(self.reliability.timeout / 2, self._keep_alive)
         else:
             self._keep_alive_handle = self.loop.call_later(0.1, self._keep_alive)
-
-    @property
-    def timeout(self):
-        return 10.0

@@ -507,3 +507,8 @@ class ReliabilityLayer:
     def max_datagram_size(self) -> int:
         """Maximum UDP payload we can send (MTU minus DatagramHeader size)."""
         return self._cc.max_mtu - DatagramHeader.SIZE
+
+    @property
+    def timeout(self) -> float:
+        """Timeout in seconds."""
+        return 10.0
