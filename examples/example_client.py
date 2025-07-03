@@ -6,7 +6,9 @@ from aiorak.client import connect
 async def main():
     client = await connect("test.endstone.dev", 19132)
     print("Connected")
-    await asyncio.sleep(5)
+    while True:
+        data, reliability = await client.receive()
+        print(reliability.name, data.hex(sep=" "))
 
 
 if __name__ == "__main__":

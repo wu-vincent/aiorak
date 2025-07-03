@@ -68,13 +68,14 @@ class ClientConnection(Connection):
         return True
 
     def handle_connected_message(self, data: memoryview, addr: tuple[str, int]) -> None:
-        print(data.hex(sep=" "), addr)
+        super().handle_connected_message(data, addr)
+        match data[0]:
+            case constants.ID_CONNECTION_REQUEST_ACCEPTED:
+                self._handle_connection_request_accepted(data, addr)
 
     def _handle_open_connection_reply_1(self, data: memoryview, addr: tuple[str, int]) -> None:
         if self._open_future.done():
             return
-
-        self._open_future.set_result(None)
 
         bs = ByteStream(data)
         bs.skip_bytes(1)
@@ -83,6 +84,8 @@ class ClientConnection(Connection):
         has_security = bs.read_bool()
         mtu_size = bs.read_short()
         assert has_security is False, "Security is not supported yet"
+
+        self._open_future.set_result(None)
 
         out = ByteStream()
         out.write_byte(constants.ID_OPEN_CONNECTION_REQUEST_2)
@@ -113,6 +116,33 @@ class ClientConnection(Connection):
         out.write_bool(False)  # security
         self.reliability = ReliabilityLayer(addr, mtu_size)
         self.reliability.send(self.transport, out.data, reliable=True)
+
+    def _handle_connection_request_accepted(self, data: memoryview, addr: tuple[str, int]) -> None:
+        if self.connect_future.done():
+            return
+
+        bs = ByteStream(data)
+        bs.skip_bytes(1)
+        self.external_addr = bs.read_address()
+        bs.skip_bytes(2)  # system index (unused)
+        for i in range(constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS):
+            self.remote_addr[i] = bs.read_address()
+
+        ping_time = bs.read_long()
+        pong_time = bs.read_long()
+        self.on_connected_pong(ping_time / 1000.0, pong_time / 1000.0)
+        self.connect_future.set_result(None)
+
+        out = ByteStream()
+        out.write_byte(constants.ID_NEW_INCOMING_CONNECTION)
+        out.write_address(addr)
+        for i in range(constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS):
+            out.write_address(self.local_addr[i])
+        out.write_long(pong_time)
+        out.write_long(int(self.loop.time() * 1000))
+        self.reliability.send(self.transport, out.data, reliable=True, ordered=True)
+
+        self.ping(addr, immediate=True)
 
 
 async def connect(host: str, port: int, **kwargs) -> ClientConnection:

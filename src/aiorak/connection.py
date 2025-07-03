@@ -5,6 +5,7 @@ from aiorak.reliability import Reliability, ReliabilityLayer
 
 from . import constants
 from .reliability import Message
+import socket
 
 logger = logging.getLogger("aiorak.connection")
 
@@ -57,9 +58,18 @@ class Connection(asyncio.DatagramProtocol):
         self.reliability: ReliabilityLayer | None = None
         self.connect_future = self.loop.create_future()
         self.recv_queue: asyncio.Queue[Message] = asyncio.Queue()
+        self.external_addr: tuple[str, int] | None = None
+        self.remote_addr: list[tuple[str, int]] = [("0.0.0.0", 0)] * constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS
+        self.local_addr: list[tuple[str, int]]
+        self._fill_local_addr()
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
+        _, port = transport.get_extra_info("sockname")
+        for i, addr in enumerate(self.local_addr):
+            if addr[0] == "0.0.0.0":
+                break
+            self.local_addr[i] = (addr[0], port)
 
     def connection_lost(self, exc: Exception | None) -> None:
         self.transport = None
@@ -83,6 +93,9 @@ class Connection(asyncio.DatagramProtocol):
             else:
                 self.handle_connected_message(view, addr)
 
+    def on_connected_pong(self, ping_time: float, pong_time: float) -> None:
+        pass
+
     async def receive(self) -> tuple[bytes, Reliability]:
         return await self.recv_queue.get()
 
@@ -90,4 +103,20 @@ class Connection(asyncio.DatagramProtocol):
         raise NotImplementedError
 
     def handle_connected_message(self, data: memoryview, addr: tuple[str, int]) -> None:
-        raise NotImplementedError
+        # TODO: handling ping, pong
+        pass
+
+    def _fill_local_addr(self) -> None:
+        self.local_addr = [("0.0.0.0", 0)] * constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS
+        hostname = socket.gethostname()
+        addrinfo = socket.getaddrinfo(hostname, None, family=socket.AF_UNSPEC, type=socket.SOCK_DGRAM)
+        i = 0
+        for family, socktype, proto, canonname, sockaddr in addrinfo:
+            if family in (socket.AF_INET, socket.AF_INET6):
+                self.local_addr[i] = (sockaddr[0], 0)
+                i += 1
+                if i >= constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS:
+                    break
+
+    def ping(self, addr: tuple[str, int], *, immediate: bool = False) -> None:
+        pass

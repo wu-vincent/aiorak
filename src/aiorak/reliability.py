@@ -302,7 +302,6 @@ class ReliabilityLayer:
                 if message.reliability.reliable:
                     self._datagram_history.setdefault(header.id, []).append((message.reliable_id, time))
 
-            print(stream.data.hex(sep=" "))
             transport.sendto(stream.data, self._remote_addr)
 
         # bandwidth is exceeded, flush one more time later
@@ -332,9 +331,10 @@ class ReliabilityLayer:
             return None
 
         skipped = self._cc.on_got_packet(header.id)
-        self._naks.update(range(header.id - skipped - 1, header.id))
-        if not self.send_acks_handle:
-            self.send_naks_handle = self.loop.call_later(0.01, self._send_naks, transport, addr)
+        if skipped > 0:
+            self._naks.update(range(header.id - skipped - 1, header.id))
+            if not self.send_acks_handle:
+                self.send_naks_handle = self.loop.call_later(0.01, self._send_naks, transport, addr)
 
         self._acks.add(header.id)
         if not self.send_acks_handle:
@@ -380,7 +380,7 @@ class ReliabilityLayer:
         transport.sendto(stream.data, addr)
         print("sending ack:", stream.data.hex(sep=" "))
 
-    def _send_acks(self, transport: asyncio.DatagramTransport, addr: tuple[str, int]) -> None:
+    def _send_naks(self, transport: asyncio.DatagramTransport, addr: tuple[str, int]) -> None:
         self.send_naks_handle = None
         if not self._naks:
             return
