@@ -42,6 +42,10 @@ class ByteStream:
         self._read_pos = pos
 
     @property
+    def readable_bytes(self) -> int:
+        return len(self._buffer) - self._read_pos
+
+    @property
     def data(self) -> memoryview:
         buf = self._buffer
         if isinstance(buf, memoryview):

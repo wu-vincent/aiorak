@@ -2,6 +2,8 @@ import asyncio
 import uuid
 
 import aiorak
+from aiorak.reliability import Reliability
+
 from . import constants
 from .connection import Connection
 from .stream import ByteStream
@@ -12,7 +14,6 @@ class ClientConnection(Connection):
     def __init__(self, protocol_version=constants.RAKNET_PROTOCOL_VERSION):
         super().__init__()
         self._open_future = self.loop.create_future()
-        self._connect_future = self.loop.create_future()
         self.guid = uuid.uuid4().int >> 64
         self._protocol_version = protocol_version
 
@@ -42,7 +43,7 @@ class ClientConnection(Connection):
                 except asyncio.TimeoutError:
                     continue
 
-        await asyncio.wait_for(self._connect_future, timeout=timeout)
+        await asyncio.wait_for(self.connect_future, timeout=timeout)
 
     def handle_offline_message(self, data: memoryview, addr: tuple[str, int]) -> bool:
         connection_errors = {
@@ -68,6 +69,9 @@ class ClientConnection(Connection):
                 raise NotImplementedError(f"Unhandled offline message: {data.hex(sep=' ')}")
 
         return True
+
+    def handle_connected_message(self, data: memoryview, addr: tuple[str, int], reliability: Reliability) -> None:
+        print(data.hex(sep=" "), addr, reliability)
 
     def _handle_open_connection_reply_1(self, data: memoryview, addr: tuple[str, int]) -> None:
         if self._open_future.done():

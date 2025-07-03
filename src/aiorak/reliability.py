@@ -58,7 +58,7 @@ class Message:
     reliable_id: int | None = None
     ordering_id: int | None = None
     sequencing_id: int | None = None
-    channel: int = 0
+    channel: int | None = None
     split_id: int | None = None
     split_index: int | None = None
     split_count: int | None = None
@@ -92,36 +92,71 @@ class Message:
             stream.write_medium(self.ordering_id, endian="little")
             stream.write_byte(self.channel)
         if self.split_id is not None:
-            stream.write_long(self.split_count)
-            stream.write_long(self.split_id)
-            stream.write_long(self.split_index)
+            stream.write_int(self.split_count)
+            stream.write_short(self.split_id)
+            stream.write_int(self.split_index)
         stream.write(self.data)
+
+    @classmethod
+    def from_stream(cls, stream: ByteStream) -> "Message":
+        flag = stream.read_byte()
+        reliability = Reliability(flag >> 5)
+        split = flag & (1 << 4) != 0
+        bit_size = stream.read_short()
+        message = Message(data=b"", reliability=reliability)
+        if reliability.reliable:
+            message.reliable_id = stream.read_medium(endian="little")
+        if reliability.sequenced:
+            message.sequencing_id = stream.read_medium(endian="little")
+        if reliability.sequenced or reliability.ordered:
+            message.ordering_id = stream.read_medium(endian="little")
+            message.channel = stream.read_byte()
+        if split:
+            message.split_count = stream.read_int()
+            message.split_id = stream.read_short()
+            message.split_index = stream.read_int()
+
+        message.data = bytes(stream.read(bit_size // 8))
+        return message
 
 
 @dataclass(slots=True)
-class Datagram:
-    HEADER_SIZE: typing.ClassVar[int] = 4  # flag (1 byte) + datagram_id (3 bytes)
-    is_valid: bool
+class DatagramHeader:
+    SIZE: typing.ClassVar[int] = 4  # flag (1 byte) + datagram_id (3 bytes)
     is_ack: bool = False
     is_nak: bool = False
     is_continuous_send: bool = False
     is_in_slow_start: bool = False
     id: int | None = None
-    messages: list[Message] = field(default_factory=list)
 
     def write(self, stream: ByteStream) -> None:
         flag = 1 << 7  # valid
         if self.is_ack:
             flag |= 1 << 6
+            stream.write_byte(flag)
         elif self.is_nak:
             flag |= 1 << 5
+            stream.write_byte(flag)
         else:
             flag |= (1 << 3) if self.is_continuous_send else 0
             flag |= (1 << 2) if self.is_in_slow_start else 0
-        stream.write_byte(flag)
-        stream.write_medium(self.id, endian="little")
-        for message in self.messages:
-            message.write(stream)
+            stream.write_byte(flag)
+            stream.write_medium(self.id, endian="little")
+
+    @classmethod
+    def from_stream(cls, stream: ByteStream) -> "DatagramHeader":
+        flag = stream.read_byte()
+        assert bool(flag & (1 << 7)), "Invalid datagram header"
+        if bool(flag & (1 << 6)):
+            return cls(is_ack=True)
+
+        if bool(flag & (1 << 5)):
+            return cls(is_nak=True)
+
+        is_continuous_send = bool(flag & (1 << 3))
+        is_in_slow_start = bool(flag & (1 << 2))
+        id = stream.read_medium(endian="little")
+        return cls(is_continuous_send=is_continuous_send, is_in_slow_start=is_in_slow_start, id=id)
 
 
 class ReliabilityLayer:
@@ -244,28 +279,26 @@ class ReliabilityLayer:
                 usage += message_size
 
             if messages:
-                datagrams.append(
-                    Datagram(
-                        is_valid=True,
-                        is_ack=False,
-                        is_nak=False,
-                        is_continuous_send=self._bandwidth_exceeded,
-                        is_in_slow_start=self._cc.is_in_slow_start,
-                        messages=messages,
-                    )
-                )
+                datagrams.append(messages)
             else:
                 break
 
-        for index, datagram in enumerate(datagrams):
-            datagram.id = self._cc.next_datagram_id()
-            datagram.is_continuous_send = True if index > 0 else False
-            for message in datagram.messages:
-                if message.reliability.reliable:
-                    self._datagram_history.setdefault(datagram.id, []).append((message.reliable_id, time))
+        for index, messages in enumerate(datagrams):
+            header = DatagramHeader(
+                is_continuous_send=self._bandwidth_exceeded,
+                is_in_slow_start=self._cc.is_in_slow_start,
+            )
+            header.id = self._cc.next_datagram_id()
+            header.is_continuous_send = True if index > 0 else False
 
             stream = ByteStream()
-            datagram.write(stream)
+            header.write(stream)
+            for message in messages:
+                message.write(stream)
+                if message.reliability.reliable:
+                    self._datagram_history.setdefault(header.id, []).append((message.reliable_id, time))
+
+            print(stream.data.hex(sep=" "))
             transport.sendto(stream.data, self._remote_addr)
 
         # bandwidth is exceeded, flush one more time later
@@ -273,6 +306,31 @@ class ReliabilityLayer:
             self._bandwidth_exceeded = True
             self._flush_handle = self.loop.call_later(0.01, self.flush, transport)
 
+    def handle_datagram(self, data: memoryview, addr: tuple[str, int]) -> list[tuple[bytes, Reliability]]:
+        stream = ByteStream(data)
+        header = DatagramHeader.from_stream(stream)
+
+        if header.is_ack or header.is_nak:
+            message_ids = []
+            for _ in range(stream.read_short()):
+                singleton = stream.read_bool()
+                min_value = stream.read_medium(endian="little")
+                max_value = stream.read_medium(endian="little") if not singleton else min_value
+                message_ids.extend(range(min_value, max_value + 1))
+
+            if header.is_ack:
+                print("ACKed:", message_ids)
+            else:
+                print("NAKed:", message_ids)
+
+            return None
+
+        results = []
+        while stream.readable_bytes > 0:
+            message = Message.from_stream(stream)
+            results.append((message.data, message.reliability))
+        return results
+
     @property
     def max_datagram_size(self) -> int:
-        return self._cc.max_mtu - Datagram.HEADER_SIZE
+        return self._cc.max_mtu - DatagramHeader.SIZE

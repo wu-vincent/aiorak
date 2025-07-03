@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from aiorak.reliability import ReliabilityLayer
+from aiorak.reliability import ReliabilityLayer, Reliability
 
 logger = logging.getLogger("aiorak.connection")
 from . import constants
@@ -34,10 +34,13 @@ def is_offline_message(data: memoryview) -> bool:
 
 
 class Connection(asyncio.DatagramProtocol):
+    # TODO: send, recv, keep alive, timeout
+
     def __init__(self):
         self.loop = asyncio.get_event_loop()
         self.transport: asyncio.DatagramTransport | None = None
         self.reliability: ReliabilityLayer | None = None
+        self.connect_future = self.loop.create_future()
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
@@ -47,13 +50,19 @@ class Connection(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         view = memoryview(data)
-        if is_offline_message(view) and self.handle_offline_message(view, addr):
-            return
+        offline_msg = is_offline_message(view)
+        if offline_msg:
+            self.handle_offline_message(view, addr)
+        else:
+            results = self.reliability.handle_datagram(view, addr)
+            if results is None:
+                return
 
-        self.handle_message(view, addr)
+            for data, reliability in results:
+                self.handle_connected_message(memoryview(data), addr, reliability)
 
-    def handle_offline_message(self, data: memoryview, addr: tuple[str, int]) -> bool:
+    def handle_offline_message(self, data: memoryview, addr: tuple[str, int]) -> None:
         raise NotImplementedError
 
-    def handle_message(self, data: memoryview, addr: tuple[str, int]) -> None:
-        pass
+    def handle_connected_message(self, data: memoryview, addr: tuple[str, int], reliability: Reliability) -> None:
+        raise NotImplementedError
