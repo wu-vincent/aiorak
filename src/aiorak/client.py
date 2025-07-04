@@ -165,7 +165,7 @@ async def connect(host: str, port: int, **kwargs) -> ClientConnection:
     return client
 
 
-class UnconnectedPingProtocol(asyncio.DatagramProtocol):
+class ClientOfflineProtocol(asyncio.DatagramProtocol):
     def __init__(self, on_response):
         self.on_response = on_response
 
@@ -185,10 +185,9 @@ async def ping(host: str, port: int, timeout: float = 2.0) -> bytes:
     loop = asyncio.get_event_loop()
     on_reponse = loop.create_future()
     transport, _ = await loop.create_datagram_endpoint(
-        lambda: UnconnectedPingProtocol(on_reponse),
+        lambda: ClientOfflineProtocol(on_reponse),
         remote_addr=(host, port),
     )
-    guid = uuid.uuid4().int >> 64
     try:
         out = ByteStream()
         out.write_byte(constants.ID_UNCONNECTED_PING)
