@@ -20,7 +20,7 @@ class Server(asyncio.DatagramProtocol):
     ):
         self.loop = asyncio.get_event_loop()
         self.transport: asyncio.DatagramTransport | None = None
-        self.offline_ping_message: bytes | None = None
+        self.ping_response: bytes | None = None
         self.handler = handler
         self.binding_addr = local_addr
         self.close_future = self.loop.create_future()
@@ -33,7 +33,7 @@ class Server(asyncio.DatagramProtocol):
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         mv = memoryview(data)
         if mv[0] in {constants.ID_UNCONNECTED_PING, constants.ID_UNCONNECTED_PING_OPEN_CONNECTIONS}:
-            if not self.offline_ping_message:
+            if not self.ping_response:
                 return
 
             stream = ByteStream()
@@ -41,7 +41,7 @@ class Server(asyncio.DatagramProtocol):
             stream.write_long(int(self.loop.time() * 1000))
             stream.write_long(self.guid)
             stream.write(constants.OFFLINE_MESSAGE_DATA_ID)
-            stream.write(self.offline_ping_message)
+            stream.write(self.ping_response)
             self.transport.sendto(stream.data, addr)
 
     async def bind(self):

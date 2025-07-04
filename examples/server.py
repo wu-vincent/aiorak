@@ -16,7 +16,7 @@ async def main():
             server_name = "aiorak"
             level_name = datetime.now().isoformat()
             motd = f"MCPE;{server_name};819;1.21.93;0;50;{server.guid};{level_name};Survival;1;19132;19133;0;"
-            server.offline_ping_message = struct.pack(">H", len(motd)) + motd.encode("utf-8")
+            server.ping_response = struct.pack(">H", len(motd)) + motd.encode("utf-8")
             await asyncio.sleep(1)
 
 
