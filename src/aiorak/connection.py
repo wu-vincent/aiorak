@@ -220,8 +220,6 @@ class Connection(asyncio.DatagramProtocol):
         else:
             self.close_future.set_exception(TimeoutError("Connection timed out"))
 
-        self.state = State.DISCONNECTED
-
     async def _on_disconnection_notification(self) -> None:
         if self.close_future.done():
             return
@@ -230,4 +228,17 @@ class Connection(asyncio.DatagramProtocol):
             await asyncio.sleep(0.01)
 
         self.close_future.set_result(None)
+
+    async def close(self):
+        if not self.close_future.done():
+            self.close_future.set_result(None)
+
         self.state = State.DISCONNECTED
+        self.transport.close()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
+        return False

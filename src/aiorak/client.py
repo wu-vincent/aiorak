@@ -155,7 +155,6 @@ class ClientConnection(Connection):
             await asyncio.sleep(0.01)
 
         self.connect_future.set_exception(ConnectionError("Invalid password"))
-        self.state = State.DISCONNECTED
 
 
 async def connect(host: str, port: int, **kwargs) -> ClientConnection:
