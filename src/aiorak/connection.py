@@ -1,4 +1,5 @@
 import asyncio
+import enum
 import logging
 import socket
 from collections import deque
@@ -51,12 +52,10 @@ def is_user_message(data: memoryview) -> bool:
 
 
 class State(enum.IntEnum):
-    INVALID, CONNECTING, CONNECTED, DISCONNECTING, DISCONNECTED = range(4)
+    INVALID, CONNECTING, CONNECTED, DISCONNECTING, DISCONNECTED = range(5)
 
 
 class Connection(asyncio.DatagramProtocol):
-    # TODO: timeout
-
     def __init__(self):
         self.loop = asyncio.get_event_loop()
         self.transport: asyncio.DatagramTransport | None = None
@@ -87,17 +86,15 @@ class Connection(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         time = self.loop.time()
-
-        if self._timeout_handle:
-            self._timeout_handle.cancel()
-        self._timeout_handle = self.loop.call_later(self.reliability.timeout, self._timeout)
-
         view = memoryview(data)
         offline_msg = is_offline_message(view)
         if offline_msg:
             self.handle_offline_message(view, addr)
             return
 
+        if self._timeout_handle:
+            self._timeout_handle.cancel()
+        self._timeout_handle = self.loop.call_later(self.reliability.timeout, self._timeout)
         messages = self.reliability.handle_datagram(view, addr, time)
         if messages is None:
             return
@@ -120,7 +117,7 @@ class Connection(asyncio.DatagramProtocol):
         channel: int = 0,
         immediate: bool = False,
     ) -> None:
-        if not self.state in {State.CONNECTING, State.CONNECTED}:
+        if self.state not in {State.CONNECTING, State.CONNECTED}:
             return
 
         self.reliability.send(
@@ -174,10 +171,13 @@ class Connection(asyncio.DatagramProtocol):
                 pong_time = stream.read_long()
                 self.on_connected_pong(ping_time / 1000.0, pong_time / 1000.0)
 
+            case constants.ID_DISCONNECTION_NOTIFICATION:
+                self.state = State.DISCONNECTING
+
     def on_connected_pong(self, ping_time: float, pong_time: float) -> None:
         ping = max(0, self.loop.time() - ping_time)
         self._ping.append(ping)
-        if self._lowest_ping == None or ping < self._lowest_ping:
+        if self._lowest_ping is None or ping < self._lowest_ping:
             self._lowest_ping = ping
 
     def on_disconnect(self):
@@ -208,4 +208,5 @@ class Connection(asyncio.DatagramProtocol):
             self._keep_alive_handle = self.loop.call_later(0.1, self._keep_alive)
 
     def _timeout(self) -> None:
-        self.close_future.set_exception(TimeoutError("Connection timed out"))
+        if not self.connect_future.done():
+            self.close_future.set_exception(TimeoutError("Connection timed out"))

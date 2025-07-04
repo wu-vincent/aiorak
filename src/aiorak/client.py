@@ -2,7 +2,7 @@ import asyncio
 import uuid
 
 from . import constants
-from .connection import Connection
+from .connection import Connection, State
 from .reliability import ReliabilityLayer
 from .stream import ByteStream
 
@@ -22,7 +22,7 @@ class ClientConnection(Connection):
         attempt_interval=0.5,
         timeout=10,
     ):
-        self.state = Connection.State.CONNECTING
+        self.state = State.CONNECTING
         await self.loop.create_datagram_endpoint(lambda: self, None, remote_addr)
         for mtu_size in [max_mtu, 1200, 576]:
             out = ByteStream()
@@ -42,7 +42,7 @@ class ClientConnection(Connection):
                     continue
 
         await asyncio.wait_for(self.connect_future, timeout=timeout)
-        self.state = Connection.State.CONNECTED
+        self.state = State.CONNECTED
 
     def handle_offline_message(self, data: memoryview, addr: tuple[str, int]) -> bool:
         connection_errors = {
