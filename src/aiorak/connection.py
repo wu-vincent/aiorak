@@ -173,19 +173,13 @@ class Connection(asyncio.DatagramProtocol):
 
             case constants.ID_DISCONNECTION_NOTIFICATION:
                 self.state = State.DISCONNECTING
+                self.loop.create_task(self._wait_for_pending_acks())
 
     def on_connected_pong(self, ping_time: float, pong_time: float) -> None:
         ping = max(0, self.loop.time() - ping_time)
         self._ping.append(ping)
         if self._lowest_ping is None or ping < self._lowest_ping:
             self._lowest_ping = ping
-
-    def on_disconnect(self):
-        """The remote peer closed the connection."""
-        pass
-
-    def disconnect(self):
-        pass
 
     def _fill_local_addr(self) -> None:
         self.local_addr = [("0.0.0.0", 0)] * constants.MAXIMUM_NUMBER_OF_INTERNAL_IDS
@@ -208,5 +202,22 @@ class Connection(asyncio.DatagramProtocol):
             self._keep_alive_handle = self.loop.call_later(0.1, self._keep_alive)
 
     def _timeout(self) -> None:
-        if not self.connect_future.done():
+        if self.close_future.done():
+            return
+
+        if self.state == State.DISCONNECTING:
+            self.close_future.set_result(None)
+        else:
             self.close_future.set_exception(TimeoutError("Connection timed out"))
+
+        self.state = State.DISCONNECTED
+
+    async def _wait_for_pending_acks(self) -> None:
+        if self.close_future.done():
+            return
+
+        while self.reliability._acks:
+            await asyncio.sleep(0.1)
+
+        self.close_future.set_result(None)
+        self.state = State.DISCONNECTED
