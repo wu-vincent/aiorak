@@ -175,7 +175,8 @@ class ClientOfflineProtocol(asyncio.DatagramProtocol):
         stream.skip_bytes(8)  # ping time
         stream.skip_bytes(8)  # server guid
         stream.skip_bytes(16)  # offline data id
-        self.on_response.set_result(stream.read(stream.readable_bytes))
+        if not self.on_response.done():
+            self.on_response.set_result(stream.read(stream.readable_bytes))
 
 
 offline_guid = uuid.uuid4().int >> 64
