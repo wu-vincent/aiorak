@@ -7,6 +7,8 @@ from .exceptions import ConnectionError
 from .reliability import ReliabilityLayer
 from .stream import ByteStream
 
+__all__ = ["connect", "ping", "ClientConnection"]
+
 
 class ClientConnection(Connection):
     def __init__(self, protocol_version=constants.RAKNET_PROTOCOL_VERSION):
@@ -161,3 +163,40 @@ async def connect(host: str, port: int, **kwargs) -> ClientConnection:
     client = ClientConnection(**kwargs)
     await client.connect((host, port))
     return client
+
+
+class UnconnectedPingProtocol(asyncio.DatagramProtocol):
+    def __init__(self, on_response):
+        self.on_response = on_response
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        stream = ByteStream(data)
+        stream.skip_bytes(1)
+        stream.skip_bytes(8)  # ping time
+        stream.skip_bytes(8)  # server guid
+        stream.skip_bytes(16)  # offline data id
+        self.on_response.set_result(stream.read(stream.readable_bytes))
+
+
+offline_guid = uuid.uuid4().int >> 64
+
+
+async def ping(host: str, port: int, timeout: float = 2.0) -> bytes:
+    loop = asyncio.get_event_loop()
+    on_reponse = loop.create_future()
+    transport, _ = await loop.create_datagram_endpoint(
+        lambda: UnconnectedPingProtocol(on_reponse),
+        remote_addr=(host, port),
+    )
+    guid = uuid.uuid4().int >> 64
+    try:
+        out = ByteStream()
+        out.write_byte(constants.ID_UNCONNECTED_PING)
+        out.write_long(int(loop.time() * 1000))
+        out.write(constants.OFFLINE_MESSAGE_DATA_ID)
+        out.write_long(offline_guid)
+        transport.sendto(out.data)
+        reponse = await asyncio.wait_for(on_reponse, timeout)
+        return reponse
+    finally:
+        transport.close()
