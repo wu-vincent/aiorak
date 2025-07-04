@@ -62,7 +62,6 @@ class Message:
     split_id: int | None = None
     split_index: int | None = None
     split_count: int | None = None
-    resend_handle: asyncio.TimerHandle | None = None
 
     @property
     def header_size(self) -> int:
@@ -180,6 +179,7 @@ class ReliabilityLayer:
         self._naks: set[int] = set()
         self.send_acks_handle: asyncio.TimerHandle | None = None
         self.send_naks_handle: asyncio.TimerHandle | None = None
+        self.resend_handles: dict[int, asyncio.TimerHandle] = {}
 
     def send(
         self,
@@ -234,9 +234,8 @@ class ReliabilityLayer:
 
     def _resend(self, message: Message, immediate: bool = False) -> None:
         """Queue a previously-sent Message for retransmission."""
-        if message.resend_handle:
-            # cancel resend task after enqueue, as it will be rescheduled when processing the resend queue
-            message.resend_handle.cancel()
+        if message.reliable_id in self.resend_handles:
+            self.resend_handles[message.reliable_id].cancel()
 
         self._resend_queue.append(message)
         self.flush(immediate=immediate)
@@ -286,7 +285,7 @@ class ReliabilityLayer:
             while self._resend_queue:
                 message = self._resend_queue[0]
                 # message has no resend handle if it has just been acked after enqueue
-                if not message.data or not message.resend_handle:
+                if not message.data or message.reliable_id not in self.resend_handles:
                     self._resend_queue.popleft()
                     continue
 
@@ -297,8 +296,8 @@ class ReliabilityLayer:
 
                 message = self._resend_queue.popleft()
                 rto = self._cc.get_rto_for_retransmission()
-                assert message.resend_handle.cancelled(), "Resend handle should be cleared."
-                message.resend_handle = self.loop.call_later(rto, self._resend, message)
+                assert self.resend_handles[message.reliable_id].cancelled(), "Resend handle should be cleared."
+                self.resend_handles[message.reliable_id] = self.loop.call_later(rto, self._resend, message)
 
                 messages.append(message)
                 datagram_size += message_size
@@ -332,8 +331,8 @@ class ReliabilityLayer:
                 if message.reliability.reliable:
                     message.reliable_id = self._next_reliable_id()
                     rto = self._cc.get_rto_for_retransmission()
-                    assert message.resend_handle is None, "Resend handle already set."
-                    message.resend_handle = self.loop.call_later(rto, self._resend, message)
+                    assert message.reliable_id not in self.resend_handles, "Resend handle already set."
+                    self.resend_handles[message.reliable_id] = self.loop.call_later(rto, self._resend, message)
                     self._unacked_bytes += message_size
 
                 messages.append(message)
@@ -425,10 +424,11 @@ class ReliabilityLayer:
             for message, send_time in history:
                 rtt = max(0, time - send_time)
                 self._cc.on_ack(rtt, self._bandwidth_exceeded, datagram_id)
-                if message.resend_handle:
-                    message.resend_handle.cancel()
-                    message.resend_handle = None
-                    self._unacked_bytes -= message.header_size + len(message.data)
+                if resend_handle := self.resend_handles.pop(message.reliable_id, None):
+                    resend_handle.cancel()
+
+                message_size = message.header_size + len(message.data)
+                self._unacked_bytes -= message_size
 
     def _handle_nak(self, datagram_ids: list[int]) -> None:
         """Requeue any NAKed messages for immediate retransmission."""
