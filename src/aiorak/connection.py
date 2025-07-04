@@ -4,11 +4,10 @@ import logging
 import socket
 from collections import deque
 
-from aiorak.reliability import Reliability, ReliabilityLayer
-from aiorak.stream import ByteStream
-
 from . import constants
-from .reliability import Message
+from .exceptions import DisconnectionError, TimeoutError
+from .reliability import Message, Reliability, ReliabilityLayer
+from .stream import ByteStream
 
 logger = logging.getLogger("aiorak.connection")
 
@@ -136,7 +135,18 @@ class Connection(asyncio.DatagramProtocol):
             self._keep_alive_handle = self.loop.call_later(self.reliability.timeout / 2, self._keep_alive)
 
     async def receive(self) -> tuple[bytes, Reliability]:
-        message = await self.recv_queue.get()
+        recv_task = self.loop.create_task(self.recv_queue.get())
+        close_task = asyncio.shield(self.close_future)
+        done, pending = await asyncio.wait(
+            {recv_task, close_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if close_task in done:
+            recv_task.cancel()
+            err = self.close_future.exception()
+            raise err if err is not None else DisconnectionError("Connection closed")
+
+        message = recv_task.result()
         return message.data, message.reliability
 
     def ping(self, *, reliable: bool = False, immediate: bool = False) -> None:
@@ -169,13 +179,13 @@ class Connection(asyncio.DatagramProtocol):
                 stream.skip_bytes(1)
                 ping_time = stream.read_long()
                 pong_time = stream.read_long()
-                self.on_connected_pong(ping_time / 1000.0, pong_time / 1000.0)
+                self._on_connected_pong(ping_time / 1000.0, pong_time / 1000.0)
 
             case constants.ID_DISCONNECTION_NOTIFICATION:
                 self.state = State.DISCONNECTING
-                self.loop.create_task(self._wait_for_pending_acks())
+                self.loop.create_task(self._on_disconnection_notification())
 
-    def on_connected_pong(self, ping_time: float, pong_time: float) -> None:
+    def _on_connected_pong(self, ping_time: float, pong_time: float) -> None:
         ping = max(0, self.loop.time() - ping_time)
         self._ping.append(ping)
         if self._lowest_ping is None or ping < self._lowest_ping:
@@ -199,7 +209,7 @@ class Connection(asyncio.DatagramProtocol):
             self.ping(reliable=True, immediate=True)
             self._keep_alive_handle = self.loop.call_later(self.reliability.timeout / 2, self._keep_alive)
         else:
-            self._keep_alive_handle = self.loop.call_later(0.1, self._keep_alive)
+            self._keep_alive_handle = self.loop.call_later(0.01, self._keep_alive)
 
     def _timeout(self) -> None:
         if self.close_future.done():
@@ -212,12 +222,12 @@ class Connection(asyncio.DatagramProtocol):
 
         self.state = State.DISCONNECTED
 
-    async def _wait_for_pending_acks(self) -> None:
+    async def _on_disconnection_notification(self) -> None:
         if self.close_future.done():
             return
 
         while self.reliability._acks:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.01)
 
         self.close_future.set_result(None)
         self.state = State.DISCONNECTED

@@ -3,6 +3,7 @@ import uuid
 
 from . import constants
 from .connection import Connection, State
+from .exceptions import ConnectionError
 from .reliability import ReliabilityLayer
 from .stream import ByteStream
 
@@ -60,10 +61,10 @@ class ClientConnection(Connection):
                 self._handle_open_connection_reply_2(data, addr)
             case constants.ID_INCOMPATIBLE_PROTOCOL_VERSION:
                 if not self._open_future.done():
-                    self._open_future.set_exception(ConnectionRefusedError("Incompatible protocol version"))
+                    self._open_future.set_exception(ConnectionError("Incompatible protocol version"))
             case message_id if message_id in connection_errors:
                 if not self._open_future.done():
-                    self._open_future.set_exception(ConnectionRefusedError(connection_errors[message_id]))
+                    self._open_future.set_exception(ConnectionError(connection_errors[message_id]))
             case _:
                 raise NotImplementedError(f"Unhandled offline message: {data.hex(sep=' ')}")
 
@@ -75,7 +76,8 @@ class ClientConnection(Connection):
             case constants.ID_CONNECTION_REQUEST_ACCEPTED:
                 self._handle_connection_request_accepted(data, addr)
             case constants.ID_INVALID_PASSWORD:
-                self.connect_future.set_exception(ConnectionRefusedError("Invalid password"))
+                self.state = State.DISCONNECTING
+                self.loop.create_task(self._on_invalid_password())
 
     def _handle_open_connection_reply_1(self, data: memoryview, addr: tuple[str, int]) -> None:
         if self._open_future.done():
@@ -134,7 +136,7 @@ class ClientConnection(Connection):
 
         ping_time = bs.read_long()
         pong_time = bs.read_long()
-        self.on_connected_pong(ping_time / 1000.0, pong_time / 1000.0)
+        self._on_connected_pong(ping_time / 1000.0, pong_time / 1000.0)
         self.connect_future.set_result(None)
 
         out = ByteStream()
@@ -147,6 +149,13 @@ class ClientConnection(Connection):
         self.reliability.send(out.data, reliable=True, ordered=True)
 
         self.ping(immediate=True)
+
+    async def _on_invalid_password(self) -> None:
+        while self.reliability.send_queue or self.reliability.resend_handles:
+            await asyncio.sleep(0.01)
+
+        self.connect_future.set_exception(ConnectionError("Invalid password"))
+        self.state = State.DISCONNECTED
 
 
 async def connect(host: str, port: int, **kwargs) -> ClientConnection:

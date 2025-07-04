@@ -166,7 +166,7 @@ class ReliabilityLayer:
         self.transport = transport
         self._remote_addr = remote_addr
         self._cc = SlidingWindow(mtu - constants.UDP_HEADER_SIZE)
-        self._send_queue: deque[Message] = deque()
+        self.send_queue: deque[Message] = deque()
         self._resend_queue: deque[Message] = deque()
         self._reliable_id = 0
         self._ordered_ids = [0] * NUMBER_OF_ORDERED_STREAMS
@@ -229,7 +229,7 @@ class ReliabilityLayer:
             message.ordering_id = self._next_ordering_id(channel)
             self._sequenced_ids[channel] = 0
 
-        self._send_queue.append(message)
+        self.send_queue.append(message)
         self.flush(immediate=immediate)
 
     def _resend(self, message: Message, immediate: bool = False) -> None:
@@ -269,7 +269,7 @@ class ReliabilityLayer:
         time = self.loop.time()
         self._flush_handle = None
 
-        if not self._send_queue and not self._resend_queue:
+        if not self.send_queue and not self._resend_queue:
             return
 
         datagrams = []
@@ -316,10 +316,10 @@ class ReliabilityLayer:
         while usage < bandwidth:
             datagram_size = 0
             messages = []
-            while self._send_queue:
-                message = self._send_queue[0]
+            while self.send_queue:
+                message = self.send_queue[0]
                 if not message.data:
-                    self._send_queue.popleft()
+                    self.send_queue.popleft()
                     continue
 
                 # hit MTU
@@ -327,7 +327,7 @@ class ReliabilityLayer:
                 if message_size > self.max_datagram_size:
                     break
 
-                message = self._send_queue.popleft()
+                message = self.send_queue.popleft()
                 if message.reliability.reliable:
                     message.reliable_id = self._next_reliable_id()
                     rto = self._cc.get_rto_for_retransmission()
@@ -363,7 +363,7 @@ class ReliabilityLayer:
             self.transport.sendto(stream.data, self._remote_addr)
 
         # bandwidth is exceeded, flush one more time later
-        if self._send_queue:
+        if self.send_queue:
             self._bandwidth_exceeded = True
             self.flush()
 
