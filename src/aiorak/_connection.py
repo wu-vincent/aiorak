@@ -510,7 +510,7 @@ class Connection:
         # Client address
         reply.write_address(self.address[0], self.address[1])
         reply.write_uint16(mtu)
-        reply.write_uint8(0)  # has_security = false
+        reply.write_bit(False)  # has_security = false (1 bit, matches C++ Write(bool))
         return reply.get_data()
 
     def _handle_open_reply_2(self, data: bytes, now: float) -> bytes | None:
@@ -534,7 +534,7 @@ class Connection:
         self.remote_guid = bs.read_uint64()
         _binding_addr = bs.read_address()
         mtu = bs.read_uint16()
-        _do_security = bs.read_uint8()
+        _do_security = bs.read_bit()  # 1 bit (matches C++ Read(bool))
         self.mtu = mtu
 
         self._cc.mtu = mtu
@@ -670,7 +670,7 @@ class Connection:
         # 10 internal addresses
         for _ in range(10):
             reply.write_address("127.0.0.1", 0)
-        reply.write_int64(_sent_time)
+        reply.write_int64(_reply_time)
         reply.write_int64(int(_time.time() * 1000))
 
         self._reliability.send(reply.get_data(), Reliability.RELIABLE)
@@ -725,5 +725,5 @@ class Connection:
         if self.state == ConnectionState.CONNECTED:
             bs = BitStream()
             bs.write_uint8(ID_DISCONNECTION_NOTIFICATION)
-            self._reliability.send(bs.get_data(), Reliability.RELIABLE)
+            self._reliability.send(bs.get_data(), Reliability.RELIABLE_ORDERED)
             self.state = ConnectionState.DISCONNECTING

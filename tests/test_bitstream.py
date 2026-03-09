@@ -199,4 +199,4 @@ class TestRawBytes:
     def test_init_from_data(self):
         data = b"\xDE\xAD\xBE\xEF"
         bs = BitStream(data)
-        assert bs.read_uint32() == 0xEFBEADDE  # little-endian
+        assert bs.read_uint32() == 0xDEADBEEF  # big-endian

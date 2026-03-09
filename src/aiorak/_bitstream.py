@@ -9,9 +9,9 @@ wire-compatible output.
 
 Byte order
 ----------
-Multi-byte integers in RakNet datagrams are **big-endian** for addresses and
-**little-endian** for most protocol fields.  Each accessor documents its
-byte order explicitly.
+Multi-byte integers in RakNet datagrams are **big-endian** (the C++ BitStream
+endian-swaps on little-endian hosts).  The one exception is ``uint24_t``, which
+has a specialization that writes in native (little-endian) order.
 
 Usage::
 
@@ -20,7 +20,7 @@ Usage::
     bs.write_bits(3, 3)        # 3-bit value
     bs.write_bit(True)         # 1-bit flag
     bs.align_write_to_byte()
-    bs.write_uint16(1024)      # little-endian u16
+    bs.write_uint16(1024)      # big-endian u16
     raw = bs.get_data()
 """
 
@@ -212,7 +212,7 @@ class BitStream:
             self._read_bit_pos += 8 - remainder
 
     # ------------------------------------------------------------------
-    # Byte-aligned integer writes — little-endian unless noted
+    # Byte-aligned integer writes — big-endian unless noted
     # ------------------------------------------------------------------
 
     def write_uint8(self, value: int) -> None:
@@ -223,11 +223,11 @@ class BitStream:
         self._write_bit_pos += 8
 
     def write_uint16(self, value: int) -> None:
-        """Write a 16-bit unsigned integer (little-endian)."""
+        """Write a 16-bit unsigned integer (big-endian, matching C++ BitStream)."""
         self.align_write_to_byte()
         self._ensure_capacity(16)
         idx = self._write_bit_pos >> 3
-        self._buf[idx: idx + 2] = struct.pack("<H", value & 0xFFFF)
+        self._buf[idx: idx + 2] = struct.pack(">H", value & 0xFFFF)
         self._write_bit_pos += 16
 
     def write_uint24(self, value: int) -> None:
@@ -244,31 +244,31 @@ class BitStream:
         self._write_bit_pos += 24
 
     def write_uint32(self, value: int) -> None:
-        """Write a 32-bit unsigned integer (little-endian)."""
+        """Write a 32-bit unsigned integer (big-endian, matching C++ BitStream)."""
         self.align_write_to_byte()
         self._ensure_capacity(32)
         idx = self._write_bit_pos >> 3
-        self._buf[idx: idx + 4] = struct.pack("<I", value & 0xFFFFFFFF)
+        self._buf[idx: idx + 4] = struct.pack(">I", value & 0xFFFFFFFF)
         self._write_bit_pos += 32
 
     def write_uint64(self, value: int) -> None:
-        """Write a 64-bit unsigned integer (little-endian)."""
+        """Write a 64-bit unsigned integer (big-endian, matching C++ BitStream)."""
         self.align_write_to_byte()
         self._ensure_capacity(64)
         idx = self._write_bit_pos >> 3
-        self._buf[idx: idx + 8] = struct.pack("<Q", value & 0xFFFFFFFFFFFFFFFF)
+        self._buf[idx: idx + 8] = struct.pack(">Q", value & 0xFFFFFFFFFFFFFFFF)
         self._write_bit_pos += 64
 
     def write_int64(self, value: int) -> None:
-        """Write a 64-bit signed integer (little-endian)."""
+        """Write a 64-bit signed integer (big-endian, matching C++ BitStream)."""
         self.align_write_to_byte()
         self._ensure_capacity(64)
         idx = self._write_bit_pos >> 3
-        self._buf[idx: idx + 8] = struct.pack("<q", value)
+        self._buf[idx: idx + 8] = struct.pack(">q", value)
         self._write_bit_pos += 64
 
     # ------------------------------------------------------------------
-    # Byte-aligned integer reads — little-endian unless noted
+    # Byte-aligned integer reads — big-endian unless noted
     # ------------------------------------------------------------------
 
     def read_uint8(self) -> int:
@@ -281,12 +281,12 @@ class BitStream:
         return val
 
     def read_uint16(self) -> int:
-        """Read a 16-bit unsigned integer (little-endian)."""
+        """Read a 16-bit unsigned integer (big-endian, matching C++ BitStream)."""
         self.align_read_to_byte()
         if self._read_bit_pos + 16 > self._write_bit_pos:
             raise ValueError("Not enough data to read uint16")
         idx = self._read_bit_pos >> 3
-        (val,) = struct.unpack_from("<H", self._buf, idx)
+        (val,) = struct.unpack_from(">H", self._buf, idx)
         self._read_bit_pos += 16
         return val
 
@@ -301,32 +301,32 @@ class BitStream:
         return val
 
     def read_uint32(self) -> int:
-        """Read a 32-bit unsigned integer (little-endian)."""
+        """Read a 32-bit unsigned integer (big-endian, matching C++ BitStream)."""
         self.align_read_to_byte()
         if self._read_bit_pos + 32 > self._write_bit_pos:
             raise ValueError("Not enough data to read uint32")
         idx = self._read_bit_pos >> 3
-        (val,) = struct.unpack_from("<I", self._buf, idx)
+        (val,) = struct.unpack_from(">I", self._buf, idx)
         self._read_bit_pos += 32
         return val
 
     def read_uint64(self) -> int:
-        """Read a 64-bit unsigned integer (little-endian)."""
+        """Read a 64-bit unsigned integer (big-endian, matching C++ BitStream)."""
         self.align_read_to_byte()
         if self._read_bit_pos + 64 > self._write_bit_pos:
             raise ValueError("Not enough data to read uint64")
         idx = self._read_bit_pos >> 3
-        (val,) = struct.unpack_from("<Q", self._buf, idx)
+        (val,) = struct.unpack_from(">Q", self._buf, idx)
         self._read_bit_pos += 64
         return val
 
     def read_int64(self) -> int:
-        """Read a 64-bit signed integer (little-endian)."""
+        """Read a 64-bit signed integer (big-endian, matching C++ BitStream)."""
         self.align_read_to_byte()
         if self._read_bit_pos + 64 > self._write_bit_pos:
             raise ValueError("Not enough data to read int64")
         idx = self._read_bit_pos >> 3
-        (val,) = struct.unpack_from("<q", self._buf, idx)
+        (val,) = struct.unpack_from(">q", self._buf, idx)
         self._read_bit_pos += 64
         return val
 

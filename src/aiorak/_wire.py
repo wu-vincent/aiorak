@@ -338,7 +338,7 @@ def encode_ack(ranges: list[tuple[int, int]], has_b_and_as: bool = False) -> byt
     # No timestamp (INCLUDE_TIMESTAMP_WITH_DATAGRAMS == 0)
     if has_b_and_as:
         # AS as float — not implemented, write 0.0
-        bs.write_bytes(struct.pack("<f", 0.0))
+        bs.write_bytes(struct.pack(">f", 0.0))
     encode_range_list(bs, ranges)
     return bs.get_data()
 

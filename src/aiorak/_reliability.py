@@ -419,6 +419,7 @@ class ReliabilityLayer:
             if frame.ordering_index == self._expected_ordering_index[ch]:
                 self._receive_queue.append((frame.data, ch))
                 self._expected_ordering_index[ch] += 1
+                self._highest_sequenced[ch] = -1  # Reset per C++ behavior
                 # Flush any buffered messages that are now in order
                 self._flush_ordering_heap(ch)
             else:
@@ -442,6 +443,7 @@ class ReliabilityLayer:
             _, data = heapq.heappop(heap)
             self._receive_queue.append((data, channel))
             self._expected_ordering_index[channel] += 1
+            self._highest_sequenced[channel] = -1  # Reset per C++ behavior
 
     # ------------------------------------------------------------------
     # Split packet reassembly
@@ -531,6 +533,7 @@ class ReliabilityLayer:
                 Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
             ):
                 self._next_ordering_index[channel] += 1
+                self._next_sequencing_index[channel] = 0  # Reset per C++ behavior
 
         return frame
 
@@ -559,8 +562,22 @@ class ReliabilityLayer:
             offset += max_payload
 
         total = len(fragments)
-        # Get ordering/sequencing counters from a prototype frame
-        proto = self._build_frame(b"", reliability, channel)
+
+        # Capture ordering/sequencing counters directly (without _build_frame,
+        # which would waste a reliable message number on a prototype frame).
+        sequencing_index = 0
+        ordering_index = self._next_ordering_index[channel]
+
+        if reliability in (Reliability.UNRELIABLE_SEQUENCED, Reliability.RELIABLE_SEQUENCED):
+            sequencing_index = self._next_sequencing_index[channel]
+            self._next_sequencing_index[channel] += 1
+
+        if reliability in (
+            Reliability.RELIABLE_ORDERED,
+            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
+        ):
+            self._next_ordering_index[channel] += 1
+            self._next_sequencing_index[channel] = 0  # Reset per C++ behavior
 
         for i, chunk in enumerate(fragments):
             frame = MessageFrame(
@@ -568,8 +585,8 @@ class ReliabilityLayer:
                 data=chunk,
                 data_bit_length=len(chunk) * 8,
                 reliable_message_number=self._next_reliable_num if self._is_reliable(reliability) else 0,
-                sequencing_index=proto.sequencing_index,
-                ordering_index=proto.ordering_index,
+                sequencing_index=sequencing_index,
+                ordering_index=ordering_index,
                 ordering_channel=channel,
                 split_packet_count=total,
                 split_packet_id=split_id,
