@@ -88,17 +88,28 @@ class Server:
         if self._closed:
             return
         self._closed = True
+
+        # Disconnect all peers (queues notifications)
+        for addr, conn in list(self._peers.items()):
+            conn.disconnect()
+
+        # Let the update loop flush disconnect notifications.
+        if self._update_task is not None:
+            try:
+                await asyncio.wait_for(self._drain_all(), timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+
         if self._update_task is not None:
             self._update_task.cancel()
             try:
                 await self._update_task
             except asyncio.CancelledError:
                 pass
-        # Disconnect all peers and signal handlers
+
+        # Signal handlers and clean up
         for addr, conn in list(self._peers.items()):
-            conn.disconnect()
             conn._feed_disconnect()
-        # Cancel and await handler tasks
         for task in list(self._handler_tasks.values()):
             task.cancel()
             try:
@@ -111,6 +122,11 @@ class Server:
         if self._socket is not None:
             self._socket.close()
         self._closed_event.set()
+
+    async def _drain_all(self) -> None:
+        """Wait until all connections have flushed outgoing data."""
+        while any(c.has_pending_data for c in self._connections.values()):
+            await asyncio.sleep(0.01)
 
     async def __aenter__(self) -> "Server":
         return self
@@ -143,6 +159,8 @@ class Server:
 
         # Check for offline messages from unknown peers
         if addr not in self._connections:
+            if self._closed:
+                return  # Don't accept new connections during shutdown
             if len(data) >= 1 and data[0] in (
                 ID_UNCONNECTED_PING,
                 ID_UNCONNECTED_PING_OPEN_CONNECTIONS,
@@ -237,7 +255,9 @@ class Server:
     async def _update_loop(self) -> None:
         """Background task that ticks all connections every ~10 ms."""
         try:
-            while not self._closed:
+            while True:
+                if self._closed and not any(c.has_pending_data for c in self._connections.values()):
+                    break
                 now = _time.monotonic()
 
                 for addr, conn in list(self._connections.items()):

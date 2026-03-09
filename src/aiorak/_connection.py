@@ -195,6 +195,11 @@ class Connection:
             raise RuntimeError(f"Cannot send: connection is {self.state.name}")
         self._reliability.send(data, reliability, channel)
 
+    @property
+    def has_pending_data(self) -> bool:
+        """True if the reliability layer still has outgoing data."""
+        return self._reliability.has_pending_data
+
     def poll_events(self) -> list[tuple[_Signal, bytes]]:
         """Drain and return pending application-level signals.
 
@@ -241,7 +246,7 @@ class Connection:
                     outgoing.append(resp)
                 return outgoing
 
-        if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED):
+        if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED, ConnectionState.DISCONNECTING):
             self._reliability.on_datagram_received(data, now)
             # Process any completed messages
             while True:
@@ -272,7 +277,7 @@ class Connection:
         outgoing: list[bytes] = []
 
         # Timeout check
-        if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED):
+        if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED, ConnectionState.DISCONNECTING):
             if self._last_recv_time > 0 and now - self._last_recv_time > self.timeout:
                 self._events.append((_Signal.DISCONNECT, b""))
                 self.state = ConnectionState.DISCONNECTED
@@ -295,8 +300,13 @@ class Connection:
             self._last_ping_time = now
 
         # Reliability layer flush
-        if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED):
+        if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED, ConnectionState.DISCONNECTING):
             outgoing.extend(self._reliability.update(now))
+
+        # If disconnecting and all outgoing data has been flushed, complete the disconnect
+        if self.state == ConnectionState.DISCONNECTING and not self._reliability.has_pending_data:
+            self.state = ConnectionState.DISCONNECTED
+            self._events.append((_Signal.DISCONNECT, b""))
 
         return outgoing
 

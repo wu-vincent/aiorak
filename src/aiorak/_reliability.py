@@ -130,6 +130,11 @@ class ReliabilityLayer:
         # Completed messages ready for the application
         self._receive_queue: list[tuple[bytes, int]] = []
 
+    @property
+    def has_pending_data(self) -> bool:
+        """True if there are frames queued, in-flight, or awaiting resend."""
+        return bool(self._send_queue or self._resend_queue or self._in_flight)
+
     # ------------------------------------------------------------------
     # Public send API
     # ------------------------------------------------------------------

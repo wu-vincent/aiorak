@@ -87,20 +87,42 @@ class Client:
 
     async def close(self) -> None:
         """Gracefully disconnect from the server and release resources."""
+        if self._closed:
+            return
         self._closed = True
+
         if self._connection is not None:
             self._connection.disconnect()
+
+        # Let the update loop flush the disconnect notification.
+        if self._connection is not None and self._update_task is not None:
+            try:
+                await asyncio.wait_for(self._drain(), timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+
         if self._update_task is not None:
             self._update_task.cancel()
             try:
                 await self._update_task
             except asyncio.CancelledError:
                 pass
+
         if self._socket is not None:
             self._socket.close()
+
         # Unblock any waiting iterator
         if self._connection is not None:
             self._connection._feed_disconnect()
+
+    async def _drain(self) -> None:
+        """Wait until the reliability layer has no pending outgoing data."""
+        while (
+            self._connection is not None
+            and self._connection.has_pending_data
+            and self._connection.state == ConnectionState.DISCONNECTING
+        ):
+            await asyncio.sleep(0.01)
 
     @property
     def is_connected(self) -> bool:
@@ -204,8 +226,11 @@ class Client:
     async def _update_loop(self) -> None:
         """Background task that ticks the connection every ~10 ms."""
         try:
-            while not self._closed:
+            while True:
                 if self._connection is None:
+                    break
+                # Stop if closed AND no pending data to flush
+                if self._closed and not self._connection.has_pending_data:
                     break
 
                 now = _time.monotonic()
