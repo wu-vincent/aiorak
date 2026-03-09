@@ -5,22 +5,41 @@ build-backend = "hatchling.build"
 [project]
 name = "aiorak"
 version = "0.1.0"
-dependencies = [
-    "asyncio"
-]
 requires-python = ">=3.10"
 authors = [
     { name = "Vincent Wu", email = "magicdroidx@gmail.com" },
 ]
 description = "RakNet implementation for Python using asyncio"
 readme = "README.md"
-license = { file = "LICENSE" }
-keywords = ["raknet", "udp", "python"]
+license = "MIT"
+keywords = ["raknet", "udp", "asyncio", "networking"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "Programming Language :: Python"
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/MagicDroidX/aiorak"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.9",
 ]
 
 [tool.ruff]
 line-length = 120
 lint.extend-select = ["I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
