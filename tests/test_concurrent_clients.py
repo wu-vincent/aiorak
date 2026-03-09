@@ -1,10 +1,4 @@
-"""Concurrent client tests — adapted from ManyClientsOneServerBlockingTest.cpp.
-
-Tests 20-32 clients connecting simultaneously, exchanging data, and
-verifying server handles the load correctly.
-"""
-
-from __future__ import annotations
+"""Concurrent client tests — 20-32 clients connecting simultaneously."""
 
 import asyncio
 import struct
@@ -12,20 +6,27 @@ import struct
 import pytest
 
 import aiorak
-from aiorak import EventType, Reliability
+from aiorak import Connection, Reliability
 
-from .conftest import collect_events
+from .conftest import collect_packets, wait_for_peers
 
 
 def _client_payload(client_idx: int, msg_idx: int) -> bytes:
-    """Create a payload identifying client and message index."""
     return b"\x86" + struct.pack(">HH", client_idx, msg_idx)
 
 
 class TestConcurrentClients:
     async def test_32_clients_connect(self, server_factory, client_factory):
-        """All 32 clients get CONNECT events."""
-        server = await server_factory(max_connections=32)
+        """All 32 clients connect successfully."""
+        connect_count = 0
+
+        async def handler(conn: Connection):
+            nonlocal connect_count
+            connect_count += 1
+            async for data in conn:
+                pass
+
+        server = await server_factory(handler=handler, max_connections=32)
         addr = server.local_address
 
         clients = []
@@ -33,12 +34,12 @@ class TestConcurrentClients:
             cli = await client_factory(addr)
             clients.append(cli)
 
-        events = await collect_events(server, EventType.CONNECT, count=32, timeout=15.0)
-        assert len(events) == 32
+        await wait_for_peers(server, 32, timeout=15.0)
+        assert connect_count == 32
 
     async def test_32_clients_send_and_receive(self, server_factory, client_factory):
         """Each sends 1 msg, server echoes, all receive reply."""
-        server = await server_factory(max_connections=32)
+        server = await server_factory(max_connections=32)  # default echo handler
         addr = server.local_address
 
         clients = []
@@ -46,32 +47,22 @@ class TestConcurrentClients:
             cli = await client_factory(addr)
             clients.append(cli)
 
-        connect_events = await collect_events(
-            server, EventType.CONNECT, count=32, timeout=15.0
-        )
+        await wait_for_peers(server, 32, timeout=15.0)
 
-        # Each client sends one message
         for i, cli in enumerate(clients):
             await cli.send(_client_payload(i, 0))
 
-        # Server receives all messages and echoes back
-        recv_events = await collect_events(
-            server, EventType.RECEIVE, count=32, timeout=10.0
-        )
-        assert len(recv_events) == 32
-
-        # Echo back to each sender
-        for e in recv_events:
-            await server.send(e.address, e.data)
-
-        # Each client should receive the echo
         for cli in clients:
-            events = await collect_events(cli, EventType.RECEIVE, count=1, timeout=5.0)
-            assert len(events) == 1
+            packets = await collect_packets(cli, count=1, timeout=5.0)
+            assert len(packets) == 1
 
     async def test_broadcast_to_32_clients(self, server_factory, client_factory):
         """Server sends to all, all receive."""
-        server = await server_factory(max_connections=32)
+        async def handler(conn: Connection):
+            async for data in conn:
+                pass
+
+        server = await server_factory(handler=handler, max_connections=32)
         addr = server.local_address
 
         clients = []
@@ -79,29 +70,32 @@ class TestConcurrentClients:
             cli = await client_factory(addr)
             clients.append(cli)
 
-        connect_events = await collect_events(
-            server, EventType.CONNECT, count=32, timeout=15.0
-        )
+        await wait_for_peers(server, 32, timeout=15.0)
 
         broadcast_msg = b"\x86broadcast"
-        for e in connect_events:
-            await server.send(e.address, broadcast_msg)
+        for peer in server._peers.values():
+            await peer.send(broadcast_msg)
 
-        # All clients should receive the broadcast
         tasks = [
-            collect_events(cli, EventType.RECEIVE, count=1, timeout=5.0)
+            collect_packets(cli, count=1, timeout=5.0)
             for cli in clients
         ]
         results = await asyncio.gather(*tasks)
         for r in results:
             assert len(r) == 1
-            assert r[0].data == broadcast_msg
+            assert r[0] == broadcast_msg
 
 
 class TestScaledDataExchange:
     async def test_20_clients_10_messages_each(self, server_factory, client_factory):
         """200 msgs total, per-sender ordering preserved."""
-        server = await server_factory(max_connections=20)
+        received = asyncio.Queue()
+
+        async def handler(conn: Connection):
+            async for data in conn:
+                received.put_nowait(data)
+
+        server = await server_factory(handler=handler, max_connections=20)
         addr = server.local_address
 
         clients = []
@@ -109,9 +103,8 @@ class TestScaledDataExchange:
             cli = await client_factory(addr)
             clients.append(cli)
 
-        await collect_events(server, EventType.CONNECT, count=20, timeout=15.0)
+        await wait_for_peers(server, 20, timeout=15.0)
 
-        # Each client sends 10 messages
         for i, cli in enumerate(clients):
             for j in range(10):
                 await cli.send(
@@ -119,13 +112,17 @@ class TestScaledDataExchange:
                 )
 
         total = 200
-        events = await collect_events(server, EventType.RECEIVE, count=total, timeout=20.0)
-        assert len(events) == total
+        items = []
+        async def _collect():
+            while len(items) < total:
+                items.append(await received.get())
 
-        # Verify per-sender ordering
+        await asyncio.wait_for(_collect(), timeout=20.0)
+        assert len(items) == total
+
         per_sender: dict[int, list[int]] = {}
-        for e in events:
-            client_idx, msg_idx = struct.unpack(">HH", e.data[1:5])
+        for data in items:
+            client_idx, msg_idx = struct.unpack(">HH", data[1:5])
             per_sender.setdefault(client_idx, []).append(msg_idx)
 
         for sender, indices in per_sender.items():
@@ -135,7 +132,11 @@ class TestScaledDataExchange:
 
     async def test_server_sends_unique_to_each(self, server_factory, client_factory):
         """20 clients, each gets a different payload."""
-        server = await server_factory(max_connections=20)
+        async def handler(conn: Connection):
+            async for data in conn:
+                pass
+
+        server = await server_factory(handler=handler, max_connections=20)
         addr = server.local_address
 
         clients = []
@@ -143,22 +144,18 @@ class TestScaledDataExchange:
             cli = await client_factory(addr)
             clients.append(cli)
 
-        connect_events = await collect_events(
-            server, EventType.CONNECT, count=20, timeout=15.0
-        )
+        await wait_for_peers(server, 20, timeout=15.0)
 
-        # Send unique message to each client
-        for i, e in enumerate(connect_events):
+        # Send unique message to each peer
+        for i, peer in enumerate(server._peers.values()):
             payload = b"\x86unique" + struct.pack(">H", i)
-            await server.send(e.address, payload)
+            await peer.send(payload)
 
-        # Each client should receive their unique message
         tasks = [
-            collect_events(cli, EventType.RECEIVE, count=1, timeout=5.0)
+            collect_packets(cli, count=1, timeout=5.0)
             for cli in clients
         ]
         results = await asyncio.gather(*tasks)
 
-        received_data = {r[0].data for r in results}
-        # All 20 should be unique
+        received_data = {r[0] for r in results}
         assert len(received_data) == 20

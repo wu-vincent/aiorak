@@ -6,23 +6,24 @@ import asyncio
 import aiorak
 
 
+async def handler(conn: aiorak.Connection):
+    print(f"[+] {conn.address[0]}:{conn.address[1]} connected")
+    async for data in conn:
+        await conn.send(data)
+    print(f"[-] {conn.address[0]}:{conn.address[1]} disconnected")
+
+
 async def main():
     parser = argparse.ArgumentParser(description="RakNet echo server")
     parser.add_argument("-p", "--port", type=int, default=19132, help="port to listen on (default: 19132)")
     parser.add_argument("--max-connections", type=int, default=32, help="max simultaneous connections (default: 32)")
     args = parser.parse_args()
 
-    server = await aiorak.create_server(("0.0.0.0", args.port), max_connections=args.max_connections)
+    server = await aiorak.create_server(("0.0.0.0", args.port), handler, max_connections=args.max_connections)
     print(f"Echo server listening on {server.local_address}")
 
     try:
-        async for event in server:
-            if event.type == aiorak.EventType.CONNECT:
-                print(f"[+] {event.address[0]}:{event.address[1]} connected")
-            elif event.type == aiorak.EventType.DISCONNECT:
-                print(f"[-] {event.address[0]}:{event.address[1]} disconnected")
-            elif event.type == aiorak.EventType.RECEIVE:
-                await server.send(event.address, event.data)
+        await server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:

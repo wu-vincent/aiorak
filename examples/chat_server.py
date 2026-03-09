@@ -1,7 +1,4 @@
-"""Chat relay server — broadcasts messages from any client to all others.
-
-Adapted from the C++ ChatExampleServer sample.
-"""
+"""Chat relay server — broadcasts messages from any client to all others."""
 
 import argparse
 import asyncio
@@ -10,12 +7,40 @@ import aiorak
 
 ID_USER = b"\x86"
 
+# Shared state
+connections: dict[tuple[str, int], aiorak.Connection] = {}
 
-async def broadcast(server, peers, data, *, exclude=None):
+
+async def broadcast(data: bytes, *, exclude: tuple[str, int] | None = None):
     """Send data to all connected peers except the excluded one."""
-    for addr in peers:
+    for addr, conn in list(connections.items()):
         if addr != exclude:
-            await server.send(addr, data)
+            try:
+                await conn.send(data)
+            except RuntimeError:
+                pass
+
+
+async def handler(conn: aiorak.Connection):
+    tag = f"{conn.address[0]}:{conn.address[1]}"
+    connections[conn.address] = conn
+    print(f"[+] {tag} joined ({len(connections)} online)")
+    notice = ID_USER + f"*** {tag} joined the chat ***".encode()
+    await broadcast(notice, exclude=conn.address)
+
+    try:
+        async for data in conn:
+            if data[:1] != ID_USER:
+                continue
+            text = data[1:].decode(errors="replace")
+            print(f"<{tag}> {text}")
+            relay = ID_USER + f"<{tag}> {text}".encode()
+            await broadcast(relay, exclude=conn.address)
+    finally:
+        connections.pop(conn.address, None)
+        print(f"[-] {tag} left ({len(connections)} online)")
+        notice = ID_USER + f"*** {tag} left the chat ***".encode()
+        await broadcast(notice)
 
 
 async def main():
@@ -24,34 +49,11 @@ async def main():
     parser.add_argument("--max-connections", type=int, default=32, help="max simultaneous connections (default: 32)")
     args = parser.parse_args()
 
-    server = await aiorak.create_server(("0.0.0.0", args.port), max_connections=args.max_connections)
-    peers: set[tuple[str, int]] = set()
+    server = await aiorak.create_server(("0.0.0.0", args.port), handler, max_connections=args.max_connections)
     print(f"Chat server listening on {server.local_address}")
 
     try:
-        async for event in server:
-            if event.type == aiorak.EventType.CONNECT:
-                peers.add(event.address)
-                tag = f"{event.address[0]}:{event.address[1]}"
-                print(f"[+] {tag} joined ({len(peers)} online)")
-                notice = ID_USER + f"*** {tag} joined the chat ***".encode()
-                await broadcast(server, peers, notice, exclude=event.address)
-
-            elif event.type == aiorak.EventType.DISCONNECT:
-                peers.discard(event.address)
-                tag = f"{event.address[0]}:{event.address[1]}"
-                print(f"[-] {tag} left ({len(peers)} online)")
-                notice = ID_USER + f"*** {tag} left the chat ***".encode()
-                await broadcast(server, peers, notice)
-
-            elif event.type == aiorak.EventType.RECEIVE:
-                if event.data[:1] != ID_USER:
-                    continue
-                text = event.data[1:].decode(errors="replace")
-                tag = f"{event.address[0]}:{event.address[1]}"
-                print(f"<{tag}> {text}")
-                relay = ID_USER + f"<{tag}> {text}".encode()
-                await broadcast(server, peers, relay, exclude=event.address)
+        await server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:

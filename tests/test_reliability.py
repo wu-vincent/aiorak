@@ -1,6 +1,5 @@
 """Unit tests for the ReliabilityLayer: send/receive, split/reassembly, ordering."""
 
-from __future__ import annotations
 
 import time
 

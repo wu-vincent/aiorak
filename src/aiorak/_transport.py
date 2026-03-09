@@ -11,10 +11,8 @@ Classes:
         for sending datagrams.
 """
 
-from __future__ import annotations
-
 import asyncio
-from typing import Callable, Optional
+from collections.abc import Callable
 
 
 class RakNetTransport(asyncio.DatagramProtocol):
@@ -34,7 +32,7 @@ class RakNetTransport(asyncio.DatagramProtocol):
         on_datagram: Callable[[bytes, tuple[str, int]], None],
     ) -> None:
         self._on_datagram = on_datagram
-        self._transport: Optional[asyncio.DatagramTransport] = None
+        self._transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         """Called when the UDP socket is ready.
@@ -67,7 +65,7 @@ class RakNetTransport(asyncio.DatagramProtocol):
         # Transient UDP errors are normal; do not close the transport.
         pass
 
-    def connection_lost(self, exc: Optional[Exception]) -> None:
+    def connection_lost(self, exc: Exception | None) -> None:
         """Called when the transport is closed.
 
         Args:

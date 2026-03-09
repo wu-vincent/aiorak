@@ -1,6 +1,5 @@
 """Tests for the offline (unconnected) ping/pong API."""
 
-from __future__ import annotations
 
 import asyncio
 

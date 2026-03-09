@@ -1,15 +1,11 @@
 """Error paths and edge cases in the public Client/Server APIs."""
 
-from __future__ import annotations
-
 import asyncio
 
 import pytest
 
 import aiorak
-from aiorak import Client, EventType, Reliability, Server
-
-from .conftest import collect_events
+from aiorak import Client, Connection, Reliability, Server
 
 
 class TestClientErrors:
@@ -52,12 +48,6 @@ class TestClientErrors:
 
 
 class TestServerErrors:
-    async def test_send_to_unknown_address_raises_key_error(self, server_factory):
-        """server.send(unknown_addr) should raise KeyError."""
-        server = await server_factory()
-        with pytest.raises(KeyError):
-            await server.send(("192.168.255.255", 12345), b"\x86hello")
-
     async def test_double_close_is_safe(self, server_factory):
         """close() twice should not raise any exception."""
         server = await server_factory()

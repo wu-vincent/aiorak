@@ -1,6 +1,5 @@
 """Integration tests for the connection handshake sequence."""
 
-from __future__ import annotations
 
 import asyncio
 

@@ -1,6 +1,5 @@
 """Unit tests for CongestionController and sequence number wrapping."""
 
-from __future__ import annotations
 
 import pytest
 

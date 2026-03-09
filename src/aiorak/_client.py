@@ -1,29 +1,26 @@
-"""RakNet client: initiate a connection and exchange messages with a server.
+"""RakNet client: connect to a server and exchange messages.
 
 The :class:`Client` class creates a UDP socket, performs MTU discovery and
 the full RakNet connection handshake, and then provides ``async for``
-iteration over incoming :class:`~aiorak._types.Event` objects.
+iteration over incoming data packets as raw bytes.
 
 Example::
 
     client = await aiorak.connect(('127.0.0.1', 19132))
-    await client.send(b"hello", reliability=aiorak.Reliability.RELIABLE_ORDERED)
-    async for event in client:
-        if event.type == aiorak.EventType.RECEIVE:
-            print("Got:", event.data)
+    await client.send(b"hello")
+    async for data in client:
+        print("Got:", data)
 """
-
-from __future__ import annotations
 
 import asyncio
 import random
 import time as _time
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
-from ._connection import Connection, ConnectionState
+from ._connection import Connection, ConnectionState, _Signal
 from ._constants import MAXIMUM_MTU
 from ._transport import RakNetTransport, UDPSocket
-from ._types import Event, EventType, Reliability
+from ._types import Reliability
 
 
 class Client:
@@ -40,15 +37,14 @@ class Client:
     def __init__(
         self,
         server_address: tuple[str, int],
-        guid: Optional[int] = None,
+        guid: int | None = None,
     ) -> None:
         self._server_address = server_address
         self._guid = guid if guid is not None else random.getrandbits(64)
 
-        self._connection: Optional[Connection] = None
-        self._socket: Optional[UDPSocket] = None
-        self._event_queue: asyncio.Queue[Event] = asyncio.Queue()
-        self._update_task: Optional[asyncio.Task[None]] = None
+        self._connection: Connection | None = None
+        self._socket: UDPSocket | None = None
+        self._update_task: asyncio.Task[None] | None = None
         self._connected_event: asyncio.Event = asyncio.Event()
         self._closed = False
 
@@ -58,9 +54,6 @@ class Client:
 
     async def connect(self, timeout: float = 10.0) -> None:
         """Open a UDP socket and perform the RakNet handshake.
-
-        Blocks until the connection is fully established or *timeout*
-        seconds elapse.
 
         Args:
             timeout: Maximum seconds to wait for the handshake to complete.
@@ -106,7 +99,8 @@ class Client:
         if self._socket is not None:
             self._socket.close()
         # Unblock any waiting iterator
-        await self._event_queue.put(Event(type=EventType.DISCONNECT, address=self._server_address))
+        if self._connection is not None:
+            self._connection._feed_disconnect()
 
     @property
     def is_connected(self) -> bool:
@@ -138,45 +132,48 @@ class Client:
         Args:
             data: Raw payload bytes.
             reliability: Delivery guarantee.
-            channel: Ordering channel (0–31).
+            channel: Ordering channel (0-31).
 
         Raises:
             RuntimeError: If the client is not connected.
         """
         if self._connection is None:
             raise RuntimeError("Client is not connected")
-        self._connection.send(data, reliability, channel)
+        self._connection._send(data, reliability, channel)
 
     # ------------------------------------------------------------------
-    # Async iterator
+    # Receiving
     # ------------------------------------------------------------------
 
-    async def __aiter__(self) -> AsyncIterator[Event]:
-        """Yield :class:`Event` objects as they arrive from the server.
+    async def recv(self) -> bytes:
+        """Wait for and return the next received packet.
 
-        The iterator runs until the connection is closed.
+        Returns:
+            The raw payload bytes.
 
-        Yields:
-            Application-level events (connect, disconnect, receive).
+        Raises:
+            ConnectionError: If the connection was closed.
         """
-        while not self._closed:
-            event = await self._event_queue.get()
-            if self._closed and event.type == EventType.DISCONNECT:
-                yield event
-                break
-            yield event
+        if self._connection is None:
+            raise ConnectionError("Client is not connected")
+        return await self._connection.recv()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        """Yield received data packets as raw bytes.
+
+        The iterator ends when the connection is closed.
+        """
+        if self._connection is None:
+            return
+        async for data in self._connection:
+            yield data
 
     # ------------------------------------------------------------------
     # Internal: datagram dispatch
     # ------------------------------------------------------------------
 
     def _on_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Callback for incoming UDP datagrams.
-
-        Args:
-            data: Raw UDP payload.
-            addr: ``(host, port)`` of the sender.
-        """
+        """Callback for incoming UDP datagrams."""
         if self._connection is None:
             return
         now = _time.monotonic()
@@ -185,19 +182,18 @@ class Client:
         for resp in responses:
             self._send_raw(resp, self._server_address)
 
-        # Collect events
-        for event in self._connection.poll_events():
-            self._event_queue.put_nowait(event)
-            if event.type == EventType.CONNECT:
+        # Process signals
+        for signal, sig_data in self._connection.poll_events():
+            if signal == _Signal.CONNECT:
                 self._connected_event.set()
+            elif signal == _Signal.DISCONNECT:
+                self._connection._feed_disconnect()
+                self._closed = True
+            elif signal == _Signal.RECEIVE:
+                self._connection._feed_data(sig_data)
 
     def _send_raw(self, data: bytes, addr: tuple[str, int]) -> None:
-        """Send raw bytes over the UDP socket.
-
-        Args:
-            data: Encoded datagram.
-            addr: Destination ``(host, port)``.
-        """
+        """Send raw bytes over the UDP socket."""
         if self._socket is not None:
             self._socket.send_to(data, addr)
 
@@ -206,11 +202,7 @@ class Client:
     # ------------------------------------------------------------------
 
     async def _update_loop(self) -> None:
-        """Background task that ticks the connection every ~10 ms.
-
-        Handles ACK/NAK flushing, retransmission, timeout detection, and
-        promotes completed reliable messages to the event queue.
-        """
+        """Background task that ticks the connection every ~10 ms."""
         try:
             while not self._closed:
                 if self._connection is None:
@@ -221,13 +213,15 @@ class Client:
                 for dg in datagrams:
                     self._send_raw(dg, self._server_address)
 
-                # Collect events
-                for event in self._connection.poll_events():
-                    self._event_queue.put_nowait(event)
-                    if event.type == EventType.CONNECT:
+                # Process signals
+                for signal, sig_data in self._connection.poll_events():
+                    if signal == _Signal.CONNECT:
                         self._connected_event.set()
-                    elif event.type == EventType.DISCONNECT:
+                    elif signal == _Signal.DISCONNECT:
+                        self._connection._feed_disconnect()
                         self._closed = True
+                    elif signal == _Signal.RECEIVE:
+                        self._connection._feed_data(sig_data)
 
                 # Check for completed reliable messages
                 while True:
@@ -236,12 +230,7 @@ class Client:
                         break
                     data_bytes, channel = msg
                     if data_bytes and self._connection.state == ConnectionState.CONNECTED:
-                        self._event_queue.put_nowait(Event(
-                            type=EventType.RECEIVE,
-                            address=self._server_address,
-                            data=data_bytes,
-                            channel=channel,
-                        ))
+                        self._connection._feed_data(data_bytes)
 
                 await asyncio.sleep(0.01)
         except asyncio.CancelledError:

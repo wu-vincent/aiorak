@@ -4,15 +4,11 @@ This module provides the core type definitions used across the library:
 
 * :class:`Reliability` — packet delivery guarantees (mirrors the C++ enum).
 * :class:`Priority` — send-queue priority levels.
-* :class:`EventType` — high-level events surfaced to user code.
-* :class:`Event` — immutable container yielded by server/client iterators.
+* :class:`PingResponse` — result of an offline ping.
 """
 
-from __future__ import annotations
-
 import enum
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 
 class Reliability(enum.IntEnum):
@@ -60,38 +56,6 @@ class Priority(enum.IntEnum):
     HIGH = 1
     MEDIUM = 2
     LOW = 3
-
-
-class EventType(enum.IntEnum):
-    """High-level events yielded by the server and client async iterators."""
-
-    CONNECT = 0
-    """A new peer has completed the connection handshake."""
-
-    DISCONNECT = 1
-    """A peer has disconnected (gracefully or due to timeout)."""
-
-    RECEIVE = 2
-    """A user-data message has been received from a peer."""
-
-
-@dataclass(frozen=True, slots=True)
-class Event:
-    """An immutable event produced by the networking layer.
-
-    Attributes:
-        type: The kind of event (connect, disconnect, or receive).
-        address: ``(host, port)`` tuple identifying the remote peer.
-        data: Raw payload bytes for :attr:`EventType.RECEIVE` events,
-            or ``b""`` for connection lifecycle events.
-        channel: Ordering channel the message arrived on (0–31), meaningful
-            only for ordered/sequenced reliability modes.
-    """
-
-    type: EventType
-    address: tuple[str, int]
-    data: bytes = b""
-    channel: int = 0
 
 
 @dataclass(frozen=True, slots=True)

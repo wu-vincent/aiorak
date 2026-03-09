@@ -24,10 +24,7 @@ Usage::
     raw = bs.get_data()
 """
 
-from __future__ import annotations
-
 import struct
-from typing import Optional
 
 
 class BitStream:

@@ -1,21 +1,23 @@
-"""Integration tests adapted from MaximumConnectTest.cpp — connection limit enforcement."""
-
-from __future__ import annotations
+"""Integration tests — connection limit enforcement."""
 
 import asyncio
 
 import pytest
 
 import aiorak
-from aiorak import EventType
+from aiorak import Connection
 
-from .conftest import collect_events
+from .conftest import wait_for_peers
 
 
 class TestMaxConnections:
     async def test_max_connections_enforced(self, server_factory):
         """Server with max_connections=3, try connecting 5 clients, verify only 3 succeed."""
-        server = await server_factory(max_connections=3)
+        async def handler(conn: Connection):
+            async for data in conn:
+                pass
+
+        server = await server_factory(handler=handler, max_connections=3)
         addr = server.local_address
 
         connected: list[aiorak.Client] = []
@@ -31,17 +33,8 @@ class TestMaxConnections:
         # At most 3 should have connected
         assert len(connected) <= 3
 
-        # Verify server got at most 3 CONNECT events
-        try:
-            events = await collect_events(
-                server, EventType.CONNECT, count=3, timeout=3.0
-            )
-            connect_count = len(events)
-        except asyncio.TimeoutError:
-            # Fewer than 3 connected (possible if timing is tight)
-            connect_count = 0
-
-        assert connect_count <= 3
+        # Verify server has at most 3 peers
+        assert len(server._peers) <= 3
 
         # Cleanup
         for cli in connected:

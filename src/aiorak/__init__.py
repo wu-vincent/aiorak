@@ -11,13 +11,14 @@ Quick start
 
     import aiorak
 
-    server = await aiorak.create_server(('0.0.0.0', 19132), max_connections=64)
-    async for event in server:
-        if event.type == aiorak.EventType.CONNECT:
-            print(f"Peer connected: {event.address}")
-        elif event.type == aiorak.EventType.RECEIVE:
-            await server.send(event.address, b"reply",
-                              reliability=aiorak.Reliability.RELIABLE_ORDERED)
+    async def handler(conn: aiorak.Connection):
+        print(f"{conn.address} connected")
+        async for data in conn:
+            await conn.send(data)  # echo
+        print(f"{conn.address} disconnected")
+
+    server = await aiorak.create_server(('0.0.0.0', 19132), handler)
+    await server.serve_forever()
 
 **Client**::
 
@@ -25,27 +26,22 @@ Quick start
 
     client = await aiorak.connect(('127.0.0.1', 19132))
     await client.send(b"hello", reliability=aiorak.Reliability.RELIABLE_ORDERED)
-    async for event in client:
-        if event.type == aiorak.EventType.RECEIVE:
-            print("Got:", event.data)
+    async for data in client:
+        print("Got:", data)
 
 Public API
 ----------
 """
 
-from __future__ import annotations
-
-from typing import Optional
-
 from ._client import Client
+from ._connection import Connection
 from ._server import Server
-from ._types import Event, EventType, PingResponse, Priority, Reliability
+from ._types import PingResponse, Priority, Reliability
 
 __all__ = [
     "Client",
+    "Connection",
     "Server",
-    "Event",
-    "EventType",
     "PingResponse",
     "Priority",
     "Reliability",
@@ -57,31 +53,31 @@ __all__ = [
 
 async def create_server(
     address: tuple[str, int],
+    handler,
     max_connections: int = 64,
     *,
-    guid: Optional[int] = None,
+    guid: int | None = None,
 ) -> Server:
     """Create and start a RakNet server bound to *address*.
 
-    This is the primary entry point for server-side code.  The returned
-    :class:`Server` is immediately ready to accept connections.
-
     Args:
-        address: ``(host, port)`` to bind the UDP listener to.  Use port 0
-            to let the OS pick an available port.
+        address: ``(host, port)`` to bind the UDP listener to.
+        handler: Async callable invoked once per connected peer.
         max_connections: Maximum number of simultaneous peer connections.
-        guid: Optional 64-bit server GUID.  A random value is generated if
-            not supplied.
+        guid: Optional 64-bit server GUID.
 
     Returns:
         A started :class:`Server` instance.
 
     Example::
 
-        server = await aiorak.create_server(('0.0.0.0', 19132))
-        print(f"Listening on {server.local_address}")
+        async def handler(conn):
+            async for data in conn:
+                await conn.send(data)
+
+        server = await aiorak.create_server(('0.0.0.0', 19132), handler)
     """
-    server = Server(address, max_connections=max_connections, guid=guid)
+    server = Server(address, handler, max_connections=max_connections, guid=guid)
     await server.start()
     return server
 
@@ -90,7 +86,7 @@ async def connect(
     address: tuple[str, int],
     *,
     timeout: float = 10.0,
-    guid: Optional[int] = None,
+    guid: int | None = None,
 ) -> Client:
     """Connect to a RakNet server at *address*.
 
@@ -100,8 +96,7 @@ async def connect(
     Args:
         address: ``(host, port)`` of the remote server.
         timeout: Maximum seconds to wait for the handshake to complete.
-        guid: Optional 64-bit client GUID.  A random value is generated if
-            not supplied.
+        guid: Optional 64-bit client GUID.
 
     Returns:
         A connected :class:`Client` instance.

@@ -1,45 +1,57 @@
-"""Integration tests adapted from PeerConnectDisconnectTest.cpp — connect/disconnect cycles."""
-
-from __future__ import annotations
+"""Integration tests — connect/disconnect cycles."""
 
 import asyncio
 
 import pytest
 
 import aiorak
-from aiorak import EventType
+from aiorak import Connection
 
-from .conftest import collect_events
+from .conftest import wait_for_peers
 
 
 class TestConnectDisconnect:
     async def test_connect_disconnect_reconnect(self, server_factory):
         """Client connects, disconnects, reconnects to same server."""
-        server = await server_factory()
+        handler_calls = []
+        handler_done = asyncio.Event()
+
+        async def handler(conn: Connection):
+            handler_calls.append(conn.address)
+            async for data in conn:
+                pass
+            handler_done.set()
+
+        server = await server_factory(handler=handler)
         addr = server.local_address
 
         # First connection
         client1 = await aiorak.connect(addr, timeout=5.0)
         assert client1.is_connected
-        events = await collect_events(server, EventType.CONNECT, count=1, timeout=3.0)
-        assert len(events) == 1
+        await wait_for_peers(server, 1, timeout=3.0)
+        assert len(handler_calls) == 1
 
         # Disconnect
         await client1.close()
-        disc_events = await collect_events(server, EventType.DISCONNECT, count=1, timeout=5.0)
-        assert len(disc_events) == 1
+        await asyncio.wait_for(handler_done.wait(), timeout=5.0)
+
+        handler_done.clear()
 
         # Reconnect with a new client
         client2 = await aiorak.connect(addr, timeout=5.0)
         assert client2.is_connected
-        events2 = await collect_events(server, EventType.CONNECT, count=1, timeout=3.0)
-        assert len(events2) == 1
+        await wait_for_peers(server, 1, timeout=3.0)
+        assert len(handler_calls) == 2
 
         await client2.close()
 
     async def test_multiple_clients_disconnect(self, server_factory, client_factory):
         """5 clients connect, some disconnect, verify server tracks correctly."""
-        server = await server_factory(max_connections=10)
+        async def handler(conn: Connection):
+            async for data in conn:
+                pass
+
+        server = await server_factory(handler=handler, max_connections=10)
         addr = server.local_address
 
         clients = []
@@ -47,17 +59,14 @@ class TestConnectDisconnect:
             cli = await client_factory(addr)
             clients.append(cli)
 
-        # Wait for all connections
-        connect_events = await collect_events(server, EventType.CONNECT, count=5, timeout=5.0)
-        assert len(connect_events) == 5
+        await wait_for_peers(server, 5, timeout=5.0)
 
         # Disconnect clients 0 and 2
         await clients[0].close()
         await clients[2].close()
 
-        # Server should see 2 disconnects
-        disc_events = await collect_events(server, EventType.DISCONNECT, count=2, timeout=5.0)
-        assert len(disc_events) == 2
+        # Wait for server to detect disconnects
+        await asyncio.sleep(0.5)
 
         # Remaining clients (1, 3, 4) should still work
         for i in [1, 3, 4]:

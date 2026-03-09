@@ -1,7 +1,4 @@
-"""Multi-client stress test — spawns N clients that each send M messages.
-
-Demonstrates concurrent async I/O with asyncio.gather().
-"""
+"""Multi-client stress test — spawns N clients that each send M messages."""
 
 import argparse
 import asyncio
@@ -20,12 +17,9 @@ async def client_task(client_id, host, port, num_messages):
 
     async def receive_loop():
         nonlocal received
-        async for event in client:
-            if event.type == aiorak.EventType.RECEIVE:
-                received += 1
-                if received >= num_messages:
-                    break
-            elif event.type == aiorak.EventType.DISCONNECT:
+        async for data in client:
+            received += 1
+            if received >= num_messages:
                 break
 
     recv_task = asyncio.create_task(receive_loop())
@@ -48,6 +42,12 @@ async def client_task(client_id, host, port, num_messages):
     return sent, received
 
 
+async def handler(conn: aiorak.Connection):
+    """Echo handler for the server."""
+    async for data in conn:
+        await conn.send(data)
+
+
 async def main():
     parser = argparse.ArgumentParser(description="RakNet multi-client stress test")
     parser.add_argument("-c", "--clients", type=int, default=5, help="number of clients (default: 5)")
@@ -55,16 +55,9 @@ async def main():
     args = parser.parse_args()
 
     # Start echo server on ephemeral port
-    server = await aiorak.create_server(("0.0.0.0", 0), max_connections=args.clients + 1)
+    server = await aiorak.create_server(("0.0.0.0", 0), handler, max_connections=args.clients + 1)
     host, port = "127.0.0.1", server.local_address[1]
     print(f"Server on :{port}, launching {args.clients} clients x {args.messages} messages")
-
-    async def server_loop():
-        async for event in server:
-            if event.type == aiorak.EventType.RECEIVE:
-                await server.send(event.address, event.data)
-
-    server_task = asyncio.create_task(server_loop())
 
     t0 = time.monotonic()
     results = await asyncio.gather(
@@ -72,7 +65,6 @@ async def main():
     )
     elapsed = time.monotonic() - t0
 
-    server_task.cancel()
     await server.close()
 
     total_sent = sum(s for s, _ in results)

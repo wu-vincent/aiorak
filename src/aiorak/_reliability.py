@@ -16,12 +16,9 @@ The layer is driven by a periodic ``update()`` call (typically every 10 ms)
 and by ``on_datagram_received()`` for inbound traffic.
 """
 
-from __future__ import annotations
-
 import heapq
 import time as _time
 from dataclasses import dataclass, field
-from typing import Optional
 
 from ._bitstream import BitStream
 from ._congestion import CongestionController, seq_greater_than
@@ -185,7 +182,7 @@ class ReliabilityLayer:
         elif header.is_data:
             self._handle_data(header, body, now)  # type: ignore[arg-type]
 
-    def poll_receive(self) -> Optional[tuple[bytes, int]]:
+    def poll_receive(self) -> tuple[bytes, int] | None:
         """Pop the next completed message from the receive queue.
 
         Returns:
@@ -445,7 +442,7 @@ class ReliabilityLayer:
     # Split packet reassembly
     # ------------------------------------------------------------------
 
-    def _reassemble_split(self, frame: MessageFrame) -> Optional[bytes]:
+    def _reassemble_split(self, frame: MessageFrame) -> bytes | None:
         """Accumulate a split fragment and return the reassembled payload when complete.
 
         Args:

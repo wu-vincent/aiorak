@@ -1,6 +1,5 @@
 """Unit tests for BitStream bit/byte-level I/O."""
 
-from __future__ import annotations
 
 import pytest
 

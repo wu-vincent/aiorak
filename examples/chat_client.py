@@ -1,8 +1,4 @@
-"""Interactive chat client — reads stdin, sends messages, prints received text.
-
-Adapted from the C++ ChatExampleClient sample.
-Uses run_in_executor for stdin so it works on Windows.
-"""
+"""Interactive chat client — reads stdin, sends messages, prints received text."""
 
 import argparse
 import asyncio
@@ -11,11 +7,6 @@ import sys
 import aiorak
 
 ID_USER = b"\x86"
-
-
-async def read_input(loop):
-    """Read a line from stdin without blocking the event loop."""
-    return await loop.run_in_executor(None, sys.stdin.readline)
 
 
 async def main():
@@ -27,24 +18,20 @@ async def main():
     client = await aiorak.connect((args.host, args.port), timeout=10.0)
     print(f"Connected to {args.host}:{args.port}. Type messages and press Enter.")
 
-    loop = asyncio.get_running_loop()
     done = False
 
     async def receive_loop():
         nonlocal done
-        async for event in client:
-            if event.type == aiorak.EventType.RECEIVE:
-                if event.data[:1] == ID_USER:
-                    print(event.data[1:].decode(errors="replace"))
-            elif event.type == aiorak.EventType.DISCONNECT:
-                print("Disconnected from server.")
-                done = True
-                break
+        async for data in client:
+            if data[:1] == ID_USER:
+                print(data[1:].decode(errors="replace"))
+        done = True
+        print("Disconnected from server.")
 
     async def input_loop():
         nonlocal done
         while not done:
-            line = await read_input(loop)
+            line = await asyncio.to_thread(sys.stdin.readline)
             if not line:
                 break
             text = line.rstrip("\n")

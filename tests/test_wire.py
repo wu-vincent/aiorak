@@ -1,6 +1,5 @@
 """Unit tests for wire format encode/decode round-trips."""
 
-from __future__ import annotations
 
 from aiorak._bitstream import BitStream
 from aiorak._types import Reliability

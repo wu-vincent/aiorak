@@ -1,26 +1,33 @@
 """Shared fixtures for aiorak tests."""
 
-from __future__ import annotations
-
 import asyncio
-from typing import AsyncIterator
+from collections.abc import Awaitable, Callable
 
 import pytest
 
 import aiorak
-from aiorak import Client, Event, EventType, Server
+from aiorak import Client, Connection, Server
 
 
 @pytest.fixture
 async def server_factory():
-    """Factory fixture that creates servers and cleans them up after the test."""
+    """Factory fixture that creates servers and cleans them up after the test.
+
+    If no handler is provided, a default echo handler is used.
+    """
     servers: list[Server] = []
 
+    async def _default_handler(conn: Connection):
+        async for data in conn:
+            await conn.send(data)
+
     async def _make(
+        handler: Callable[[Connection], Awaitable[None]] | None = None,
         address: tuple[str, int] = ("127.0.0.1", 0),
         max_connections: int = 64,
     ) -> Server:
-        srv = await aiorak.create_server(address, max_connections=max_connections)
+        h = handler if handler is not None else _default_handler
+        srv = await aiorak.create_server(address, h, max_connections=max_connections)
         servers.append(srv)
         return srv
 
@@ -51,51 +58,49 @@ async def client_factory():
 
 @pytest.fixture
 async def server_and_client(server_factory, client_factory):
-    """Create a connected server+client pair, yield (server, client, server_addr)."""
+    """Create a connected server+client pair with echo handler.
+
+    Yields (server, client, server_addr).
+    """
     server = await server_factory()
     addr = server.local_address
     client = await client_factory(addr)
+    # Give the connection a moment to complete on the server side
+    await asyncio.sleep(0.05)
     yield server, client, addr
 
 
-async def collect_events(
-    source: Server | Client,
-    event_type: EventType,
+async def collect_packets(
+    source: Client,
     count: int,
     timeout: float = 5.0,
-) -> list[Event]:
-    """Collect *count* events of *event_type* from *source* within *timeout*."""
-    events: list[Event] = []
+) -> list[bytes]:
+    """Collect *count* data packets from a Client within *timeout*."""
+    packets: list[bytes] = []
 
     async def _gather():
-        async for event in source:
-            if event.type == event_type:
-                events.append(event)
-                if len(events) >= count:
-                    return
-
-    await asyncio.wait_for(_gather(), timeout=timeout)
-    return events
-
-
-async def collect_all_events(
-    source: Server | Client,
-    count: int,
-    timeout: float = 5.0,
-) -> list[Event]:
-    """Collect *count* events of any type from *source* within *timeout*."""
-    events: list[Event] = []
-
-    async def _gather():
-        async for event in source:
-            events.append(event)
-            if len(events) >= count:
+        async for data in source:
+            packets.append(data)
+            if len(packets) >= count:
                 return
 
     await asyncio.wait_for(_gather(), timeout=timeout)
-    return events
+    return packets
 
 
-def force_close_transport(peer: Server | Client) -> None:
+async def wait_for_peers(
+    server: Server,
+    count: int,
+    timeout: float = 5.0,
+) -> None:
+    """Wait until *server* has at least *count* connected peers."""
+    async def _wait():
+        while len(server._peers) < count:
+            await asyncio.sleep(0.02)
+
+    await asyncio.wait_for(_wait(), timeout=timeout)
+
+
+def force_close_transport(target: Server | Client) -> None:
     """Close the underlying UDP transport without graceful disconnect."""
-    peer._socket._transport.close()
+    target._socket._transport.close()

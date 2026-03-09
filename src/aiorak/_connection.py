@@ -13,13 +13,12 @@ and a :class:`~aiorak._congestion.CongestionController` that handle the
 reliable-UDP mechanics.
 """
 
-from __future__ import annotations
-
+import asyncio
 import enum
 import random
 import struct
 import time as _time
-from typing import Optional
+from collections.abc import AsyncIterator
 
 from ._bitstream import BitStream
 from ._congestion import CongestionController
@@ -43,7 +42,14 @@ from ._constants import (
     UDP_HEADER_SIZE,
 )
 from ._reliability import ReliabilityLayer
-from ._types import Event, EventType, Reliability
+from ._types import Reliability
+
+
+class _Signal(enum.IntEnum):
+    """Internal lifecycle signals (not part of the public API)."""
+    CONNECT = 0
+    DISCONNECT = 1
+    RECEIVE = 2
 
 
 class ConnectionState(enum.IntEnum):
@@ -108,15 +114,74 @@ class Connection:
         # Server handshake tracking
         self._system_index: int = 0
 
-        # Pending events for the application layer
-        self._events: list[Event] = []
+        # Pending signals for the application layer
+        self._events: list[tuple[_Signal, bytes]] = []
+
+        # Async packet queue for user-facing iteration
+        self._packet_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._closed = False
 
     # ------------------------------------------------------------------
-    # Public interface
+    # Public async interface
     # ------------------------------------------------------------------
 
-    def send(self, data: bytes, reliability: Reliability = Reliability.RELIABLE_ORDERED, channel: int = 0) -> None:
-        """Enqueue user data for transmission.
+    async def send(self, data: bytes, reliability: Reliability = Reliability.RELIABLE_ORDERED, channel: int = 0) -> None:
+        """Send a message to this peer.
+
+        Args:
+            data: Raw payload bytes.
+            reliability: Delivery guarantee.
+            channel: Ordering channel (0–31).
+
+        Raises:
+            RuntimeError: If the connection is not in the ``CONNECTED`` state.
+        """
+        if self._closed:
+            raise RuntimeError("Connection is closed")
+        self._send(data, reliability, channel)
+
+    async def recv(self) -> bytes:
+        """Wait for and return the next received packet.
+
+        Returns:
+            The raw payload bytes.
+
+        Raises:
+            ConnectionError: If the peer disconnected.
+        """
+        data = await self._packet_queue.get()
+        if data is None:
+            raise ConnectionError("Peer disconnected")
+        return data
+
+    async def close(self) -> None:
+        """Disconnect this peer."""
+        if not self._closed:
+            self._closed = True
+            self.disconnect()
+
+    def _feed_data(self, data: bytes) -> None:
+        """Push received data into the packet queue (called internally)."""
+        self._packet_queue.put_nowait(data)
+
+    def _feed_disconnect(self) -> None:
+        """Signal disconnect by pushing a None sentinel (called internally)."""
+        self._packet_queue.put_nowait(None)
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        """Yield received data packets until the peer disconnects."""
+        while True:
+            data = await self._packet_queue.get()
+            if data is None:
+                break
+            yield data
+
+    # ------------------------------------------------------------------
+    # Internal send
+    # ------------------------------------------------------------------
+
+    def _send(self, data: bytes, reliability: Reliability = Reliability.RELIABLE_ORDERED, channel: int = 0) -> None:
+        """Enqueue user data for transmission (sync, internal).
 
         Args:
             data: Raw payload bytes.
@@ -130,17 +195,17 @@ class Connection:
             raise RuntimeError(f"Cannot send: connection is {self.state.name}")
         self._reliability.send(data, reliability, channel)
 
-    def poll_events(self) -> list[Event]:
-        """Drain and return pending application-level events.
+    def poll_events(self) -> list[tuple[_Signal, bytes]]:
+        """Drain and return pending application-level signals.
 
         Returns:
-            A list of :class:`~aiorak._types.Event` instances.
+            A list of ``(_Signal, data_bytes)`` tuples.
         """
         events = list(self._events)
         self._events.clear()
         return events
 
-    def poll_receive(self) -> Optional[tuple[bytes, int]]:
+    def poll_receive(self) -> tuple[bytes, int] | None:
         """Pop the next completed message from the reliability layer.
 
         Returns:
@@ -209,10 +274,7 @@ class Connection:
         # Timeout check
         if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED):
             if self._last_recv_time > 0 and now - self._last_recv_time > self.timeout:
-                self._events.append(Event(
-                    type=EventType.DISCONNECT,
-                    address=self.address,
-                ))
+                self._events.append((_Signal.DISCONNECT, b""))
                 self.state = ConnectionState.DISCONNECTED
                 return outgoing
 
@@ -261,7 +323,7 @@ class Connection:
         self._handshake_retransmit_time = now
         return self._build_open_request_1(now)
 
-    def _build_open_request_1(self, now: float) -> Optional[bytes]:
+    def _build_open_request_1(self, now: float) -> bytes | None:
         """Build an ``ID_OPEN_CONNECTION_REQUEST_1`` packet.
 
         Args:
@@ -302,7 +364,7 @@ class Connection:
         """
         return len(data) >= 1 and data[0] in self._OFFLINE_MSG_IDS
 
-    def _handle_offline(self, data: bytes, now: float) -> Optional[bytes]:
+    def _handle_offline(self, data: bytes, now: float) -> bytes | None:
         """Route offline (unconnected) handshake messages.
 
         Args:
@@ -327,7 +389,7 @@ class Connection:
             return self._handle_open_reply_2(data, now)
         return None
 
-    def _handle_open_request_1(self, data: bytes, now: float) -> Optional[bytes]:
+    def _handle_open_request_1(self, data: bytes, now: float) -> bytes | None:
         """Handle ``ID_OPEN_CONNECTION_REQUEST_1`` (server side).
 
         Validates the magic bytes and protocol version, then replies with
@@ -364,7 +426,7 @@ class Connection:
         reply.write_uint16(incoming_mtu)
         return reply.get_data()
 
-    def _handle_open_reply_1(self, data: bytes, now: float) -> Optional[bytes]:
+    def _handle_open_reply_1(self, data: bytes, now: float) -> bytes | None:
         """Handle ``ID_OPEN_CONNECTION_REPLY_1`` (client side).
 
         Extracts the server GUID and negotiated MTU, then sends
@@ -403,7 +465,7 @@ class Connection:
         reply.write_uint64(self.guid)
         return reply.get_data()
 
-    def _handle_open_request_2(self, data: bytes, now: float) -> Optional[bytes]:
+    def _handle_open_request_2(self, data: bytes, now: float) -> bytes | None:
         """Handle ``ID_OPEN_CONNECTION_REQUEST_2`` (server side).
 
         Extracts the client GUID and MTU, then replies with
@@ -441,7 +503,7 @@ class Connection:
         reply.write_uint8(0)  # has_security = false
         return reply.get_data()
 
-    def _handle_open_reply_2(self, data: bytes, now: float) -> Optional[bytes]:
+    def _handle_open_reply_2(self, data: bytes, now: float) -> bytes | None:
         """Handle ``ID_OPEN_CONNECTION_REPLY_2`` (client side).
 
         Completes the offline handshake phase and sends ``ID_CONNECTION_REQUEST``
@@ -481,7 +543,7 @@ class Connection:
     # Connected (reliable) message handling
     # ------------------------------------------------------------------
 
-    def _handle_connected_message(self, data: bytes, now: float) -> Optional[list[bytes]]:
+    def _handle_connected_message(self, data: bytes, now: float) -> list[bytes] | None:
         """Route a message received through the reliability layer.
 
         Handles internal protocol messages (connection request/accepted,
@@ -506,7 +568,7 @@ class Connection:
             return self._handle_connection_accepted(data, now)
         elif msg_id == ID_NEW_INCOMING_CONNECTION and self.is_server and self.state == ConnectionState.CONNECTING:
             self.state = ConnectionState.CONNECTED
-            self._events.append(Event(type=EventType.CONNECT, address=self.address))
+            self._events.append((_Signal.CONNECT, b""))
             return None
 
         # Internal connected messages — validate expected size to avoid
@@ -518,22 +580,17 @@ class Connection:
             return None  # Pong received — RTT already updated by ACK layer
         elif msg_id == ID_DISCONNECTION_NOTIFICATION and len(data) == 1:
             self.state = ConnectionState.DISCONNECTED
-            self._events.append(Event(type=EventType.DISCONNECT, address=self.address))
+            self._events.append((_Signal.DISCONNECT, b""))
             return None
         elif msg_id == ID_DETECT_LOST_CONNECTIONS and len(data) == 1:
             return None  # ACK is implicit
         else:
             # User message
             if self.state == ConnectionState.CONNECTED:
-                self._events.append(Event(
-                    type=EventType.RECEIVE,
-                    address=self.address,
-                    data=data,
-                    channel=0,
-                ))
+                self._events.append((_Signal.RECEIVE, data))
             return None
 
-    def _handle_connection_request(self, data: bytes, now: float) -> Optional[list[bytes]]:
+    def _handle_connection_request(self, data: bytes, now: float) -> list[bytes] | None:
         """Handle ``ID_CONNECTION_REQUEST`` (server side, reliable phase).
 
         Sends ``ID_CONNECTION_REQUEST_ACCEPTED`` back through the reliability
@@ -570,7 +627,7 @@ class Connection:
         self._reliability.send(reply.get_data(), Reliability.RELIABLE)
         return None
 
-    def _handle_connection_accepted(self, data: bytes, now: float) -> Optional[list[bytes]]:
+    def _handle_connection_accepted(self, data: bytes, now: float) -> list[bytes] | None:
         """Handle ``ID_CONNECTION_REQUEST_ACCEPTED`` (client side, reliable phase).
 
         Transitions to ``CONNECTED`` state and sends
@@ -594,7 +651,7 @@ class Connection:
         _reply_time = bs.read_int64()
 
         self.state = ConnectionState.CONNECTED
-        self._events.append(Event(type=EventType.CONNECT, address=self.address))
+        self._events.append((_Signal.CONNECT, b""))
 
         # Send ID_NEW_INCOMING_CONNECTION
         reply = BitStream()
@@ -624,7 +681,7 @@ class Connection:
         bs.write_int64(int(now * 1000))
         self._reliability.send(bs.get_data(), Reliability.UNRELIABLE)
 
-    def _handle_connected_ping(self, data: bytes, now: float) -> Optional[list[bytes]]:
+    def _handle_connected_ping(self, data: bytes, now: float) -> list[bytes] | None:
         """Handle ``ID_CONNECTED_PING`` and reply with ``ID_CONNECTED_PONG``.
 
         Args:

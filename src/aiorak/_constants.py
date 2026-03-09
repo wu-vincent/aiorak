@@ -7,8 +7,6 @@ protocol.  Values are drawn directly from the C++ reference implementation
 standard RakNet 4.x peers.
 """
 
-from __future__ import annotations
-
 # ---------------------------------------------------------------------------
 # Offline message magic (16 bytes) — used to distinguish offline handshake
 # packets from regular connected traffic.

@@ -27,15 +27,11 @@ async def main():
 
         # Collect replies
         reply_count = 0
-        async for event in client:
-            if event.type == aiorak.EventType.RECEIVE:
-                text = event.data[1:].decode() if event.data[:1] == ID_USER else repr(event.data)
-                print(f"Reply: {text}")
-                reply_count += 1
-                if reply_count >= args.count:
-                    break
-            elif event.type == aiorak.EventType.DISCONNECT:
-                print("Disconnected from server")
+        async for data in client:
+            text = data[1:].decode() if data[:1] == ID_USER else repr(data)
+            print(f"Reply: {text}")
+            reply_count += 1
+            if reply_count >= args.count:
                 break
     except KeyboardInterrupt:
         pass

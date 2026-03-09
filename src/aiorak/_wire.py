@@ -21,11 +21,8 @@ resulting categories applies:
   number followed by one or more message frames.
 """
 
-from __future__ import annotations
-
 import struct
 from dataclasses import dataclass, field
-from typing import Optional
 
 from ._bitstream import BitStream
 from ._types import Reliability
@@ -212,7 +209,7 @@ def encode_message_frame(bs: BitStream, frame: MessageFrame) -> None:
     bs.write_bytes(frame.data)
 
 
-def decode_message_frame(bs: BitStream) -> Optional[MessageFrame]:
+def decode_message_frame(bs: BitStream) -> MessageFrame | None:
     """Deserialize a single :class:`MessageFrame` from *bs*.
 
     The layout exactly follows ``CreateInternalPacketFromBitStream`` in

@@ -9,8 +9,6 @@ The controller is **not** thread-safe; it is designed to be driven by a
 single asyncio task per connection.
 """
 
-from __future__ import annotations
-
 from ._constants import SEQ_NUM_MAX, SYN_INTERVAL
 
 
