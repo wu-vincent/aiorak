@@ -1,15 +1,18 @@
 """Minimal echo server — replies to every message with the same data."""
 
+import argparse
 import asyncio
-import sys
 
 import aiorak
 
 
 async def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 19132
+    parser = argparse.ArgumentParser(description="RakNet echo server")
+    parser.add_argument("-p", "--port", type=int, default=19132, help="port to listen on (default: 19132)")
+    parser.add_argument("--max-connections", type=int, default=32, help="max simultaneous connections (default: 32)")
+    args = parser.parse_args()
 
-    server = await aiorak.create_server(("0.0.0.0", port), max_connections=32)
+    server = await aiorak.create_server(("0.0.0.0", args.port), max_connections=args.max_connections)
     print(f"Echo server listening on {server.local_address}")
 
     try:

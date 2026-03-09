@@ -92,3 +92,20 @@ class Event:
     address: tuple[str, int]
     data: bytes = b""
     channel: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class PingResponse:
+    """Response from an unconnected (offline) ping.
+
+    Attributes:
+        latency_ms: Round-trip time in milliseconds.
+        server_guid: The 64-bit GUID of the responding server.
+        data: Custom offline ping response data set by the server, or ``b""``.
+        address: ``(host, port)`` of the responding server.
+    """
+
+    latency_ms: float
+    server_guid: int
+    data: bytes
+    address: tuple[str, int]

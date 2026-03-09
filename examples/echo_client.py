@@ -1,7 +1,7 @@
 """Minimal echo client — sends 5 messages and prints replies."""
 
+import argparse
 import asyncio
-import sys
 
 import aiorak
 
@@ -9,14 +9,17 @@ ID_USER = b"\x86"
 
 
 async def main():
-    host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 19132
+    parser = argparse.ArgumentParser(description="RakNet echo client")
+    parser.add_argument("-H", "--host", default="127.0.0.1", help="server host (default: 127.0.0.1)")
+    parser.add_argument("-p", "--port", type=int, default=19132, help="server port (default: 19132)")
+    parser.add_argument("-n", "--count", type=int, default=5, help="number of messages to send (default: 5)")
+    args = parser.parse_args()
 
-    client = await aiorak.connect((host, port), timeout=10.0)
-    print(f"Connected to {host}:{port}")
+    client = await aiorak.connect((args.host, args.port), timeout=10.0)
+    print(f"Connected to {args.host}:{args.port}")
 
     try:
-        for i in range(5):
+        for i in range(args.count):
             msg = ID_USER + f"Hello #{i}".encode()
             await client.send(msg)
             print(f"Sent: Hello #{i}")
@@ -29,7 +32,7 @@ async def main():
                 text = event.data[1:].decode() if event.data[:1] == ID_USER else repr(event.data)
                 print(f"Reply: {text}")
                 reply_count += 1
-                if reply_count >= 5:
+                if reply_count >= args.count:
                     break
             elif event.type == aiorak.EventType.DISCONNECT:
                 print("Disconnected from server")

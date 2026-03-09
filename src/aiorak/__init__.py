@@ -39,17 +39,19 @@ from typing import Optional
 
 from ._client import Client
 from ._server import Server
-from ._types import Event, EventType, Priority, Reliability
+from ._types import Event, EventType, PingResponse, Priority, Reliability
 
 __all__ = [
     "Client",
     "Server",
     "Event",
     "EventType",
+    "PingResponse",
     "Priority",
     "Reliability",
     "create_server",
     "connect",
+    "ping",
 ]
 
 
@@ -116,3 +118,94 @@ async def connect(
     client = Client(address, guid=guid)
     await client.connect(timeout=timeout)
     return client
+
+
+async def ping(
+    address: tuple[str, int],
+    *,
+    timeout: float = 3.0,
+    only_if_open: bool = False,
+) -> PingResponse:
+    """Send an unconnected ping and wait for the pong response.
+
+    This does **not** establish a connection — it is useful for LAN server
+    discovery and pre-connection latency checks.
+
+    Args:
+        address: ``(host, port)`` of the target server.
+        timeout: Maximum seconds to wait for a reply.
+        only_if_open: If ``True``, send ``ID_UNCONNECTED_PING_OPEN_CONNECTIONS``
+            so the server only replies when it has free connection slots.
+
+    Returns:
+        A :class:`PingResponse` with the round-trip latency, server GUID,
+        and any custom offline data.
+
+    Raises:
+        asyncio.TimeoutError: If no pong is received within *timeout*.
+
+    Example::
+
+        resp = await aiorak.ping(('127.0.0.1', 19132))
+        print(f"Latency: {resp.latency_ms:.1f} ms, GUID: {resp.server_guid}")
+    """
+    import asyncio
+    import random
+    import time as _time
+
+    from ._bitstream import BitStream
+    from ._constants import (
+        ID_UNCONNECTED_PING,
+        ID_UNCONNECTED_PING_OPEN_CONNECTIONS,
+        ID_UNCONNECTED_PONG,
+        OFFLINE_MAGIC,
+    )
+    from ._transport import RakNetTransport, UDPSocket
+
+    result_future: asyncio.Future[PingResponse] = asyncio.get_running_loop().create_future()
+    send_time = _time.monotonic()
+    guid = random.getrandbits(64)
+
+    def on_datagram(data: bytes, addr: tuple[str, int]) -> None:
+        if result_future.done():
+            return
+        if len(data) < 33 or data[0] != ID_UNCONNECTED_PONG:
+            return
+        bs = BitStream(data)
+        bs.read_uint8()  # msg ID
+        _echoed_time = bs.read_int64()
+        server_guid = bs.read_uint64()
+        magic = bs.read_bytes(16)
+        if magic != OFFLINE_MAGIC:
+            return
+        # Remaining bytes are custom offline data
+        remaining = len(data) - 33
+        offline_data = bs.read_bytes(remaining) if remaining > 0 else b""
+        latency_ms = (_time.monotonic() - send_time) * 1000.0
+        result_future.set_result(PingResponse(
+            latency_ms=latency_ms,
+            server_guid=server_guid,
+            data=offline_data,
+            address=addr,
+        ))
+
+    loop = asyncio.get_running_loop()
+    transport, _protocol = await loop.create_datagram_endpoint(
+        lambda: RakNetTransport(on_datagram),
+        remote_addr=address,
+    )
+    socket = UDPSocket(transport)
+
+    try:
+        # Build unconnected ping packet
+        msg_id = ID_UNCONNECTED_PING_OPEN_CONNECTIONS if only_if_open else ID_UNCONNECTED_PING
+        bs = BitStream()
+        bs.write_uint8(msg_id)
+        bs.write_int64(int(_time.time() * 1000))
+        bs.write_bytes(OFFLINE_MAGIC)
+        bs.write_uint64(guid)
+        socket.send_to(bs.get_data(), address)
+
+        return await asyncio.wait_for(result_future, timeout=timeout)
+    finally:
+        socket.close()

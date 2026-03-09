@@ -22,11 +22,13 @@ import time as _time
 from typing import AsyncIterator, Optional
 
 from ._connection import Connection, ConnectionState
+from ._bitstream import BitStream
 from ._constants import (
     ID_OPEN_CONNECTION_REQUEST_1,
     ID_OPEN_CONNECTION_REQUEST_2,
     ID_UNCONNECTED_PING,
     ID_UNCONNECTED_PING_OPEN_CONNECTIONS,
+    ID_UNCONNECTED_PONG,
     MAXIMUM_MTU,
     OFFLINE_MAGIC,
 )
@@ -61,6 +63,7 @@ class Server:
         self._event_queue: asyncio.Queue[Event] = asyncio.Queue()
         self._update_task: Optional[asyncio.Task[None]] = None
         self._closed = False
+        self._offline_ping_response: bytes = b""
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -112,6 +115,21 @@ class Server:
         if self._socket is not None:
             return self._socket.local_address
         return self._local_address
+
+    # ------------------------------------------------------------------
+    # Offline ping
+    # ------------------------------------------------------------------
+
+    def set_offline_ping_response(self, data: bytes) -> None:
+        """Set custom data to include in unconnected pong replies.
+
+        This data is appended to every ``ID_UNCONNECTED_PONG`` response,
+        allowing LAN server discovery or pre-connection metadata exchange.
+
+        Args:
+            data: Arbitrary bytes to attach (may be empty).
+        """
+        self._offline_ping_response = data
 
     # ------------------------------------------------------------------
     # Sending
@@ -174,13 +192,15 @@ class Server:
         """
         now = _time.monotonic()
 
-        # Check for offline handshake messages from unknown peers
+        # Check for offline messages from unknown peers
         if addr not in self._connections:
             if len(data) >= 1 and data[0] in (
-                ID_OPEN_CONNECTION_REQUEST_1,
                 ID_UNCONNECTED_PING,
                 ID_UNCONNECTED_PING_OPEN_CONNECTIONS,
             ):
+                self._handle_unconnected_ping(data, addr)
+                return
+            if len(data) >= 1 and data[0] == ID_OPEN_CONNECTION_REQUEST_1:
                 if len(self._connections) >= self._max_connections:
                     # TODO: send ID_NO_FREE_INCOMING_CONNECTIONS
                     return
@@ -206,6 +226,41 @@ class Server:
             self._event_queue.put_nowait(event)
             if event.type == EventType.DISCONNECT:
                 self._connections.pop(addr, None)
+
+    def _handle_unconnected_ping(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Respond to an unconnected ping with an unconnected pong.
+
+        Args:
+            data: Raw datagram bytes (starts with the ping message ID).
+            addr: ``(host, port)`` of the sender.
+        """
+        # Minimum size: 1 (ID) + 8 (time) + 16 (magic) = 25 bytes
+        if len(data) < 25:
+            return
+
+        bs = BitStream(data)
+        msg_id = bs.read_uint8()
+        ping_time = bs.read_int64()
+        magic = bs.read_bytes(16)
+        if magic != OFFLINE_MAGIC:
+            return
+
+        # ID_UNCONNECTED_PING_OPEN_CONNECTIONS: only reply if we have free slots
+        if (
+            msg_id == ID_UNCONNECTED_PING_OPEN_CONNECTIONS
+            and len(self._connections) >= self._max_connections
+        ):
+            return
+
+        # Build pong response
+        pong = BitStream()
+        pong.write_uint8(ID_UNCONNECTED_PONG)
+        pong.write_int64(ping_time)
+        pong.write_uint64(self._guid)
+        pong.write_bytes(OFFLINE_MAGIC)
+        if self._offline_ping_response:
+            pong.write_bytes(self._offline_ping_response)
+        self._send_raw(pong.get_data(), addr)
 
     def _send_raw(self, data: bytes, addr: tuple[str, int]) -> None:
         """Send raw bytes over the UDP socket.

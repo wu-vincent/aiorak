@@ -3,8 +3,8 @@
 Demonstrates concurrent async I/O with asyncio.gather().
 """
 
+import argparse
 import asyncio
-import sys
 import time
 
 import aiorak
@@ -49,13 +49,15 @@ async def client_task(client_id, host, port, num_messages):
 
 
 async def main():
-    num_clients = int(sys.argv[1]) if len(sys.argv) > 1 else 5
-    num_messages = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+    parser = argparse.ArgumentParser(description="RakNet multi-client stress test")
+    parser.add_argument("-c", "--clients", type=int, default=5, help="number of clients (default: 5)")
+    parser.add_argument("-n", "--messages", type=int, default=10, help="messages per client (default: 10)")
+    args = parser.parse_args()
 
     # Start echo server on ephemeral port
-    server = await aiorak.create_server(("0.0.0.0", 0), max_connections=num_clients + 1)
+    server = await aiorak.create_server(("0.0.0.0", 0), max_connections=args.clients + 1)
     host, port = "127.0.0.1", server.local_address[1]
-    print(f"Server on :{port}, launching {num_clients} clients x {num_messages} messages")
+    print(f"Server on :{port}, launching {args.clients} clients x {args.messages} messages")
 
     async def server_loop():
         async for event in server:
@@ -66,7 +68,7 @@ async def main():
 
     t0 = time.monotonic()
     results = await asyncio.gather(
-        *(client_task(i, host, port, num_messages) for i in range(num_clients))
+        *(client_task(i, host, port, args.messages) for i in range(args.clients))
     )
     elapsed = time.monotonic() - t0
 
@@ -76,7 +78,7 @@ async def main():
     total_sent = sum(s for s, _ in results)
     total_recv = sum(r for _, r in results)
     print(f"\n--- Summary ---")
-    print(f"Clients: {num_clients}")
+    print(f"Clients: {args.clients}")
     print(f"Sent:    {total_sent}")
     print(f"Received:{total_recv}")
     print(f"Time:    {elapsed:.2f}s")

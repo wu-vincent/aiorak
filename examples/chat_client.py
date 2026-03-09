@@ -4,6 +4,7 @@ Adapted from the C++ ChatExampleClient sample.
 Uses run_in_executor for stdin so it works on Windows.
 """
 
+import argparse
 import asyncio
 import sys
 
@@ -18,11 +19,13 @@ async def read_input(loop):
 
 
 async def main():
-    host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 19132
+    parser = argparse.ArgumentParser(description="RakNet interactive chat client")
+    parser.add_argument("-H", "--host", default="127.0.0.1", help="server host (default: 127.0.0.1)")
+    parser.add_argument("-p", "--port", type=int, default=19132, help="server port (default: 19132)")
+    args = parser.parse_args()
 
-    client = await aiorak.connect((host, port), timeout=10.0)
-    print(f"Connected to {host}:{port}. Type messages and press Enter.")
+    client = await aiorak.connect((args.host, args.port), timeout=10.0)
+    print(f"Connected to {args.host}:{args.port}. Type messages and press Enter.")
 
     loop = asyncio.get_running_loop()
     done = False

@@ -88,19 +88,26 @@ class UDPSocket:
             :meth:`asyncio.loop.create_datagram_endpoint`.
     """
 
-    __slots__ = ("_transport",)
+    __slots__ = ("_transport", "_connected")
 
     def __init__(self, transport: asyncio.DatagramTransport) -> None:
         self._transport = transport
+        self._connected = transport.get_extra_info("peername") is not None
 
     def send_to(self, data: bytes, addr: tuple[str, int]) -> None:
         """Send a UDP datagram to the specified address.
+
+        When the underlying transport was created with ``remote_addr``
+        (connected mode), the address is omitted automatically.
 
         Args:
             data: Raw bytes to send.
             addr: ``(host, port)`` destination.
         """
-        self._transport.sendto(data, addr)
+        if self._connected:
+            self._transport.sendto(data, None)
+        else:
+            self._transport.sendto(data, addr)
 
     @property
     def local_address(self) -> tuple[str, int]:
