@@ -99,8 +99,3 @@ async def wait_for_peers(
             await asyncio.sleep(0.02)
 
     await asyncio.wait_for(_wait(), timeout=timeout)
-
-
-def force_close_transport(target: Server | Client) -> None:
-    """Close the underlying UDP transport without graceful disconnect."""
-    target._socket._transport.close()
