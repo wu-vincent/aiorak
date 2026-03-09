@@ -12,12 +12,26 @@ standard RakNet 4.x peers.
 # packets from regular connected traffic.
 # Defined in RakPeer.cpp as OFFLINE_MESSAGE_DATA_ID.
 # ---------------------------------------------------------------------------
-OFFLINE_MAGIC: bytes = bytes([
-    0x00, 0xFF, 0xFF, 0x00,
-    0xFE, 0xFE, 0xFE, 0xFE,
-    0xFD, 0xFD, 0xFD, 0xFD,
-    0x12, 0x34, 0x56, 0x78,
-])
+OFFLINE_MAGIC: bytes = bytes(
+    [
+        0x00,
+        0xFF,
+        0xFF,
+        0x00,
+        0xFE,
+        0xFE,
+        0xFE,
+        0xFE,
+        0xFD,
+        0xFD,
+        0xFD,
+        0xFD,
+        0x12,
+        0x34,
+        0x56,
+        0x78,
+    ]
+)
 
 # ---------------------------------------------------------------------------
 # Protocol version — must match the remote peer or the connection is rejected

@@ -69,9 +69,7 @@ async def test_relayed_data_arrives(server_factory, client_factory):
     await asyncio.wait_for(_recv(), timeout=duration + 5.0)
 
     assert send_count > 0, "Should have sent at least one packet"
-    assert len(received) == send_count, (
-        f"Expected {send_count} relayed packets, got {len(received)}"
-    )
+    assert len(received) == send_count, f"Expected {send_count} relayed packets, got {len(received)}"
 
 
 async def test_variable_packet_sizes(server_factory, client_factory):
@@ -97,12 +95,8 @@ async def test_variable_packet_sizes(server_factory, client_factory):
             nonlocal send_count
             deadline = asyncio.get_event_loop().time() + duration_per_size
             while asyncio.get_event_loop().time() < deadline:
-                payload = struct.pack(">HI", packet_size, send_count) + b"\xAB" * (
-                    packet_size - 6
-                )
-                await sender.send(
-                    payload, reliability=aiorak.Reliability.RELIABLE_ORDERED
-                )
+                payload = struct.pack(">HI", packet_size, send_count) + b"\xab" * (packet_size - 6)
+                await sender.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
                 send_count += 1
                 await asyncio.sleep(interval)
 
@@ -117,11 +111,8 @@ async def test_variable_packet_sizes(server_factory, client_factory):
         await asyncio.wait_for(_recv(), timeout=duration_per_size + 5.0)
 
         assert send_count > 0, f"Should have sent packets for size {packet_size}"
-        assert len(received) == send_count, (
-            f"Size {packet_size}: expected {send_count} packets, got {len(received)}"
-        )
+        assert len(received) == send_count, f"Size {packet_size}: expected {send_count} packets, got {len(received)}"
         for i, data in enumerate(received):
             assert len(data) == packet_size, (
-                f"Size {packet_size}, packet {i}: expected {packet_size} bytes, "
-                f"got {len(data)}"
+                f"Size {packet_size}, packet {i}: expected {packet_size} bytes, got {len(data)}"
             )

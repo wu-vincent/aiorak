@@ -1,6 +1,5 @@
 """Port of PingTest.cpp — verify ping latency measurement and timeout behaviour."""
 
-import asyncio
 
 import pytest
 
@@ -26,12 +25,8 @@ async def test_offline_ping(server_factory):
 
     assert response is not None
     assert response.latency_ms >= 0, "Latency must be non-negative"
-    assert response.latency_ms < 50, (
-        f"Localhost latency should be < 50 ms, got {response.latency_ms}"
-    )
-    assert response.server_guid is not None and response.server_guid != 0, (
-        "Server GUID should be set"
-    )
+    assert response.latency_ms < 50, f"Localhost latency should be < 50 ms, got {response.latency_ms}"
+    assert response.server_guid is not None and response.server_guid != 0, "Server GUID should be set"
     assert response.data == CUSTOM_PONG_DATA
 
 

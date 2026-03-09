@@ -1,9 +1,6 @@
 """Unit tests for the ReliabilityLayer: send/receive, split/reassembly, ordering."""
 
-
 import time
-
-import pytest
 
 from aiorak._congestion import CongestionController
 from aiorak._constants import MAXIMUM_MTU

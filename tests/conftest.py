@@ -94,6 +94,7 @@ async def wait_for_peers(
     timeout: float = 5.0,
 ) -> None:
     """Wait until *server* has at least *count* connected peers."""
+
     async def _wait():
         while len(server._peers) < count:
             await asyncio.sleep(0.02)

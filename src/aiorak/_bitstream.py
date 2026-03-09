@@ -227,7 +227,7 @@ class BitStream:
         self.align_write_to_byte()
         self._ensure_capacity(16)
         idx = self._write_bit_pos >> 3
-        self._buf[idx: idx + 2] = struct.pack(">H", value & 0xFFFF)
+        self._buf[idx : idx + 2] = struct.pack(">H", value & 0xFFFF)
         self._write_bit_pos += 16
 
     def write_uint24(self, value: int) -> None:
@@ -248,7 +248,7 @@ class BitStream:
         self.align_write_to_byte()
         self._ensure_capacity(32)
         idx = self._write_bit_pos >> 3
-        self._buf[idx: idx + 4] = struct.pack(">I", value & 0xFFFFFFFF)
+        self._buf[idx : idx + 4] = struct.pack(">I", value & 0xFFFFFFFF)
         self._write_bit_pos += 32
 
     def write_uint64(self, value: int) -> None:
@@ -256,7 +256,7 @@ class BitStream:
         self.align_write_to_byte()
         self._ensure_capacity(64)
         idx = self._write_bit_pos >> 3
-        self._buf[idx: idx + 8] = struct.pack(">Q", value & 0xFFFFFFFFFFFFFFFF)
+        self._buf[idx : idx + 8] = struct.pack(">Q", value & 0xFFFFFFFFFFFFFFFF)
         self._write_bit_pos += 64
 
     def write_int64(self, value: int) -> None:
@@ -264,7 +264,7 @@ class BitStream:
         self.align_write_to_byte()
         self._ensure_capacity(64)
         idx = self._write_bit_pos >> 3
-        self._buf[idx: idx + 8] = struct.pack(">q", value)
+        self._buf[idx : idx + 8] = struct.pack(">q", value)
         self._write_bit_pos += 64
 
     # ------------------------------------------------------------------
@@ -346,7 +346,7 @@ class BitStream:
         n = len(data) * 8
         self._ensure_capacity(n)
         idx = self._write_bit_pos >> 3
-        self._buf[idx: idx + len(data)] = data
+        self._buf[idx : idx + len(data)] = data
         self._write_bit_pos += n
 
     def read_bytes(self, num_bytes: int) -> bytes:
@@ -366,7 +366,7 @@ class BitStream:
         if self._read_bit_pos + n > self._write_bit_pos:
             raise ValueError(f"Cannot read {num_bytes} bytes, only {self.unread_bytes} available")
         idx = self._read_bit_pos >> 3
-        result = bytes(self._buf[idx: idx + num_bytes])
+        result = bytes(self._buf[idx : idx + num_bytes])
         self._read_bit_pos += n
         return result
 
@@ -394,7 +394,7 @@ class BitStream:
         for i, octet in enumerate(octets):
             self._buf[idx + 1 + i] = (~octet) & 0xFF
         # Port in big-endian
-        self._buf[idx + 5: idx + 7] = struct.pack(">H", port & 0xFFFF)
+        self._buf[idx + 5 : idx + 7] = struct.pack(">H", port & 0xFFFF)
         self._write_bit_pos += 7 * 8
 
     def read_address(self) -> tuple[str, int]:
@@ -445,8 +445,4 @@ class BitStream:
         return self.get_byte_length()
 
     def __repr__(self) -> str:
-        return (
-            f"BitStream(write_bits={self._write_bit_pos}, "
-            f"read_bits={self._read_bit_pos}, "
-            f"buf_len={len(self._buf)})"
-        )
+        return f"BitStream(write_bits={self._write_bit_pos}, read_bits={self._read_bit_pos}, buf_len={len(self._buf)})"

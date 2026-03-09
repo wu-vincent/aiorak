@@ -1,6 +1,5 @@
 """Unit tests for BitStream bit/byte-level I/O."""
 
-
 import pytest
 
 from aiorak._bitstream import BitStream
@@ -197,6 +196,6 @@ class TestRawBytes:
         assert bs.read_bytes(5) == payload
 
     def test_init_from_data(self):
-        data = b"\xDE\xAD\xBE\xEF"
+        data = b"\xde\xad\xbe\xef"
         bs = BitStream(data)
         assert bs.read_uint32() == 0xDEADBEEF  # big-endian

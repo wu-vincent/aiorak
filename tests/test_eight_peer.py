@@ -26,9 +26,11 @@ import aiorak
 
 async def wait_for_peers(server, count, timeout=5.0):
     """Wait until server has at least count connected peers."""
+
     async def _wait():
         while len(server._peers) < count:
             await asyncio.sleep(0.02)
+
     await asyncio.wait_for(_wait(), timeout=timeout)
 
 
@@ -38,7 +40,7 @@ NUM_CLIENTS = 8
 MESSAGES_PER_CLIENT = 100
 EXPECTED_PER_CLIENT = MESSAGES_PER_CLIENT * (NUM_CLIENTS - 1)  # 700
 EXPECTED_TOTAL = NUM_CLIENTS * EXPECTED_PER_CLIENT  # 5600
-PADDING = b"\xAB" * 200  # bulk up the packet a bit
+PADDING = b"\xab" * 200  # bulk up the packet a bit
 
 
 @pytest.mark.slow
@@ -91,11 +93,7 @@ async def test_eight_peer_broadcast(server_factory, client_factory):
     # -- sender logic -----------------------------------------------------
     async def sender(client_idx: int, client: aiorak.Client):
         for seq in range(MESSAGES_PER_CLIENT):
-            payload = (
-                bytes([client_idx])
-                + struct.pack(">I", seq)
-                + PADDING
-            )
+            payload = bytes([client_idx]) + struct.pack(">I", seq) + PADDING
             await client.send(
                 payload,
                 reliability=aiorak.Reliability.RELIABLE_ORDERED,
@@ -125,9 +123,7 @@ async def test_eight_peer_broadcast(server_factory, client_factory):
 
     # -- verification -----------------------------------------------------
     total_received = sum(recv_counts)
-    assert total_received == EXPECTED_TOTAL, (
-        f"Expected {EXPECTED_TOTAL} total messages, got {total_received}"
-    )
+    assert total_received == EXPECTED_TOTAL, f"Expected {EXPECTED_TOTAL} total messages, got {total_received}"
 
     # Per-sender ordering: within each (receiver, sender) pair the sequence
     # numbers must be strictly monotonically increasing.

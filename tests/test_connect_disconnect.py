@@ -12,12 +12,13 @@ import pytest
 import aiorak
 
 
-
 async def wait_for_peers(server, count, timeout=5.0):
     """Wait until server has at least count connected peers."""
+
     async def _wait():
         while len(server._peers) < count:
             await asyncio.sleep(0.02)
+
     await asyncio.wait_for(_wait(), timeout=timeout)
 
 
@@ -49,21 +50,16 @@ async def test_connect_disconnect_cycles(server_factory):
         async for _ in conn:
             pass
 
-    server = await server_factory(
-        handler=_noop_handler, max_connections=NUM_CLIENTS + 4
-    )
+    server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS + 4)
     addr = server.local_address
 
     for cycle in range(NUM_CYCLES):
         # Connect all clients.
-        clients = await asyncio.gather(
-            *(aiorak.connect(addr, timeout=5.0) for _ in range(NUM_CLIENTS))
-        )
+        clients = await asyncio.gather(*(aiorak.connect(addr, timeout=5.0) for _ in range(NUM_CLIENTS)))
 
         await wait_for_peers(server, NUM_CLIENTS, timeout=5.0)
         assert len(server._peers) == NUM_CLIENTS, (
-            f"Cycle {cycle}: expected {NUM_CLIENTS} peers, "
-            f"got {len(server._peers)}"
+            f"Cycle {cycle}: expected {NUM_CLIENTS} peers, got {len(server._peers)}"
         )
 
         for c in clients:
@@ -93,18 +89,14 @@ async def test_rapid_connect_disconnect(server_factory):
         async for _ in conn:
             pass
 
-    server = await server_factory(
-        handler=_noop_handler, max_connections=NUM_CLIENTS + 4
-    )
+    server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS + 4)
     addr = server.local_address
 
     deadline = time.monotonic() + 5.0
     iterations = 0
 
     while time.monotonic() < deadline:
-        clients = await asyncio.gather(
-            *(aiorak.connect(addr, timeout=5.0) for _ in range(NUM_CLIENTS))
-        )
+        clients = await asyncio.gather(*(aiorak.connect(addr, timeout=5.0) for _ in range(NUM_CLIENTS)))
         # Immediately close without waiting for server to register.
         await asyncio.gather(*(c.close() for c in clients))
         iterations += 1

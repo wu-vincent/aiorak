@@ -28,10 +28,7 @@ async def test_reliable_ordered_multi_channel(server_factory, client_factory):
         for ch in range(NUM_CHANNELS):
             # Header: 0x86 (ID) | seq (4 bytes) | channel (1 byte) | random padding
             padding_len = int.from_bytes(os.urandom(2), "big") % 5000 + 1
-            payload = (
-                struct.pack(">BIB", 0x86, seq, ch)
-                + os.urandom(padding_len)
-            )
+            payload = struct.pack(">BIB", 0x86, seq, ch) + os.urandom(padding_len)
             await client.send(
                 payload,
                 reliability=aiorak.Reliability.RELIABLE_ORDERED,
@@ -61,6 +58,5 @@ async def test_reliable_ordered_multi_channel(server_factory, client_factory):
         # Verify strictly ascending order within the channel.
         for i in range(1, len(received)):
             assert received[i] > received[i - 1], (
-                f"Channel {ch}: out-of-order at position {i} "
-                f"(seq {received[i]} <= {received[i - 1]})"
+                f"Channel {ch}: out-of-order at position {i} (seq {received[i]} <= {received[i - 1]})"
             )

@@ -13,12 +13,13 @@ import pytest
 import aiorak
 
 
-
 async def wait_for_peers(server, count, timeout=5.0):
     """Wait until server has at least count connected peers."""
+
     async def _wait():
         while len(server._peers) < count:
             await asyncio.sleep(0.02)
+
     await asyncio.wait_for(_wait(), timeout=timeout)
 
 
@@ -40,26 +41,18 @@ async def _noop_handler(conn):
 
 async def _connect_all(addr, count, timeout=5.0):
     """Connect *count* clients to *addr* in parallel, return list of clients."""
-    return list(
-        await asyncio.gather(
-            *(aiorak.connect(addr, timeout=timeout) for _ in range(count))
-        )
-    )
+    return list(await asyncio.gather(*(aiorak.connect(addr, timeout=timeout) for _ in range(count))))
 
 
 async def _close_all(clients):
     """Gracefully close all clients, ignoring errors on already-closed ones."""
-    await asyncio.gather(
-        *(c.close() for c in clients), return_exceptions=True
-    )
+    await asyncio.gather(*(c.close() for c in clients), return_exceptions=True)
 
 
 @pytest.mark.timeout(15)
 async def test_initial_connect(server_factory):
     """32 clients connect to a server and all are accepted."""
-    server = await server_factory(
-        handler=_noop_handler, max_connections=NUM_CLIENTS + 10
-    )
+    server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS + 10)
     addr = server.local_address
 
     clients = await _connect_all(addr, NUM_CLIENTS)
@@ -77,9 +70,7 @@ async def test_disconnect_reconnect_cycle(server_factory):
     Graceful disconnect sends ID_DISCONNECTION_NOTIFICATION so the server
     cleans up peers promptly (no need to wait for the 10 s timeout).
     """
-    server = await server_factory(
-        handler=_noop_handler, max_connections=NUM_CLIENTS * 4
-    )
+    server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS * 4)
     addr = server.local_address
 
     clients = await _connect_all(addr, NUM_CLIENTS)
@@ -97,8 +88,7 @@ async def test_disconnect_reconnect_cycle(server_factory):
         clients = await _connect_all(addr, NUM_CLIENTS)
         await wait_for_peers(server, NUM_CLIENTS, timeout=10.0)
         assert len(server._peers) >= NUM_CLIENTS, (
-            f"Cycle {cycle}: expected >= {NUM_CLIENTS} peers, "
-            f"got {len(server._peers)}"
+            f"Cycle {cycle}: expected >= {NUM_CLIENTS} peers, got {len(server._peers)}"
         )
 
     await _close_all(clients)
@@ -124,7 +114,11 @@ def _disable_udp_connreset(server):
         SIO_UDP_CONNRESET,
         ctypes.byref(ctypes.c_bool(False)),
         ctypes.sizeof(ctypes.c_bool),
-        None, 0, ctypes.byref(ret), None, None,
+        None,
+        0,
+        ctypes.byref(ret),
+        None,
+        None,
     )
 
 
@@ -134,9 +128,7 @@ async def test_abrupt_disconnect(server_factory):
 
     The server should detect the timeouts, then all clients reconnect.
     """
-    server = await server_factory(
-        handler=_noop_handler, max_connections=NUM_CLIENTS * 4
-    )
+    server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS * 4)
     _disable_udp_connreset(server)
     addr = server.local_address
 
@@ -152,15 +144,10 @@ async def test_abrupt_disconnect(server_factory):
     # Must wait for both _peers and _connections to drain — stale entries
     # in _connections block new connection acceptance.
     deadline = time.monotonic() + 15.0
-    while (
-        (len(server._peers) > 0 or len(server._connections) > 0)
-        and time.monotonic() < deadline
-    ):
+    while (len(server._peers) > 0 or len(server._connections) > 0) and time.monotonic() < deadline:
         await asyncio.sleep(0.1)
 
-    assert len(server._peers) == 0, (
-        f"Server still has {len(server._peers)} peers after abrupt disconnect"
-    )
+    assert len(server._peers) == 0, f"Server still has {len(server._peers)} peers after abrupt disconnect"
     assert len(server._connections) == 0, (
         f"Server still has {len(server._connections)} connections after abrupt disconnect"
     )
@@ -177,9 +164,7 @@ async def test_abrupt_disconnect(server_factory):
 @pytest.mark.timeout(15)
 async def test_rapid_churn(server_factory):
     """16 clients rapidly close and reconnect for 3 seconds, then verify."""
-    server = await server_factory(
-        handler=_noop_handler, max_connections=CHURN_CLIENTS + 10
-    )
+    server = await server_factory(handler=_noop_handler, max_connections=CHURN_CLIENTS + 10)
     addr = server.local_address
 
     clients = await _connect_all(addr, CHURN_CLIENTS)

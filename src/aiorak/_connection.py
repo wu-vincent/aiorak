@@ -15,8 +15,6 @@ reliable-UDP mechanics.
 
 import asyncio
 import enum
-import random
-import struct
 import time as _time
 from collections.abc import AsyncIterator
 
@@ -47,6 +45,7 @@ from ._types import Reliability
 
 class _Signal(enum.IntEnum):
     """Internal lifecycle signals (not part of the public API)."""
+
     CONNECT = 0
     DISCONNECT = 1
     RECEIVE = 2
@@ -125,7 +124,9 @@ class Connection:
     # Public async interface
     # ------------------------------------------------------------------
 
-    async def send(self, data: bytes, reliability: Reliability = Reliability.RELIABLE_ORDERED, channel: int = 0) -> None:
+    async def send(
+        self, data: bytes, reliability: Reliability = Reliability.RELIABLE_ORDERED, channel: int = 0
+    ) -> None:
         """Send a message to this peer.
 
         Args:
@@ -359,12 +360,14 @@ class Connection:
     # Offline handshake message handling
     # ------------------------------------------------------------------
 
-    _OFFLINE_MSG_IDS = frozenset({
-        ID_OPEN_CONNECTION_REQUEST_1,
-        ID_OPEN_CONNECTION_REPLY_1,
-        ID_OPEN_CONNECTION_REQUEST_2,
-        ID_OPEN_CONNECTION_REPLY_2,
-    })
+    _OFFLINE_MSG_IDS = frozenset(
+        {
+            ID_OPEN_CONNECTION_REQUEST_1,
+            ID_OPEN_CONNECTION_REPLY_1,
+            ID_OPEN_CONNECTION_REQUEST_2,
+            ID_OPEN_CONNECTION_REPLY_2,
+        }
+    )
 
     def _is_offline_message(self, data: bytes) -> bool:
         """Return ``True`` if *data* starts with a known offline message ID.
@@ -574,7 +577,9 @@ class Connection:
         # Handshake messages — only valid during the connecting phase
         if msg_id == ID_CONNECTION_REQUEST and self.is_server and self.state == ConnectionState.CONNECTING:
             return self._handle_connection_request(data, now)
-        elif msg_id == ID_CONNECTION_REQUEST_ACCEPTED and not self.is_server and self.state == ConnectionState.CONNECTING:
+        elif (
+            msg_id == ID_CONNECTION_REQUEST_ACCEPTED and not self.is_server and self.state == ConnectionState.CONNECTING
+        ):
             return self._handle_connection_accepted(data, now)
         elif msg_id == ID_NEW_INCOMING_CONNECTION and self.is_server and self.state == ConnectionState.CONNECTING:
             self.state = ConnectionState.CONNECTED

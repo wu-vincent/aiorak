@@ -11,7 +11,6 @@ single asyncio task per connection.
 
 from ._constants import SEQ_NUM_MAX, SYN_INTERVAL
 
-
 _UNSET: float = -1.0
 
 
@@ -206,11 +205,7 @@ class CongestionController:
         Cuts the congestion window to one MTU and enters slow start, but
         only once per congestion-control block to avoid over-reacting.
         """
-        if (
-            self._is_continuous_send
-            and not self._backed_off_this_block
-            and self.cwnd > self.mtu * 2
-        ):
+        if self._is_continuous_send and not self._backed_off_this_block and self.cwnd > self.mtu * 2:
             self.ss_thresh = max(self.cwnd / 2, float(self.mtu))
             self.cwnd = float(self.mtu)
             self._next_cc_block = self.next_datagram_seq

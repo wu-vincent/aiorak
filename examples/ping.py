@@ -19,7 +19,9 @@ async def main():
     args = parser.parse_args()
 
     # Start a server with custom offline ping data
-    async def _noop(_conn): pass
+    async def _noop(_conn):
+        pass
+
     server = await aiorak.create_server(("0.0.0.0", args.port), _noop, max_connections=10)
     server.set_offline_ping_response(b"My Game Server v1.0")
     actual_port = server.local_address[1]
@@ -31,9 +33,11 @@ async def main():
             try:
                 resp = await aiorak.ping((args.host, actual_port), timeout=2.0)
                 rtts.append(resp.latency_ms)
-                print(f"  ping {i + 1}/{args.count}: {resp.latency_ms:.2f} ms"
-                      f"  guid={resp.server_guid:#x}"
-                      f"  data={resp.data!r}")
+                print(
+                    f"  ping {i + 1}/{args.count}: {resp.latency_ms:.2f} ms"
+                    f"  guid={resp.server_guid:#x}"
+                    f"  data={resp.data!r}"
+                )
             except asyncio.TimeoutError:
                 print(f"  ping {i + 1}/{args.count}: timeout")
             await asyncio.sleep(0.5)
@@ -42,7 +46,7 @@ async def main():
 
     if rtts:
         print(f"\n--- {len(rtts)}/{args.count} replies ---")
-        print(f"min={min(rtts):.2f} ms  avg={sum(rtts)/len(rtts):.2f} ms  max={max(rtts):.2f} ms")
+        print(f"min={min(rtts):.2f} ms  avg={sum(rtts) / len(rtts):.2f} ms  max={max(rtts):.2f} ms")
     else:
         print("\nNo replies received.")
 

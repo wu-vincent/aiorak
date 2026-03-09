@@ -1,19 +1,17 @@
 """Unit tests for wire format encode/decode round-trips."""
 
-
 from aiorak._bitstream import BitStream
 from aiorak._types import Reliability
 from aiorak._wire import (
-    DatagramHeader,
     MessageFrame,
     decode_datagram,
+    decode_message_frame,
     decode_range_list,
     encode_ack,
     encode_datagram,
     encode_message_frame,
     encode_nak,
     encode_range_list,
-    decode_message_frame,
 )
 
 

@@ -8,12 +8,13 @@ import pytest
 import aiorak
 
 
-
 async def wait_for_peers(server, count, timeout=5.0):
     """Wait until server has at least count connected peers."""
+
     async def _wait():
         while len(server._peers) < count:
             await asyncio.sleep(0.02)
+
     await asyncio.wait_for(_wait(), timeout=timeout)
 
 
@@ -47,6 +48,7 @@ async def test_server_detects_client_gone(server_factory, client_factory):
     # Wait for the server to detect the dropped connections.
     # Detection is timeout-based, so allow generous time (~15s).
     expected = num_clients - num_to_drop
+
     async def _wait_for_drop():
         while len(server._peers) > expected:
             await asyncio.sleep(0.2)

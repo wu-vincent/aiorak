@@ -60,16 +60,14 @@ async def main():
     print(f"Server on :{port}, launching {args.clients} clients x {args.messages} messages")
 
     t0 = time.monotonic()
-    results = await asyncio.gather(
-        *(client_task(i, host, port, args.messages) for i in range(args.clients))
-    )
+    results = await asyncio.gather(*(client_task(i, host, port, args.messages) for i in range(args.clients)))
     elapsed = time.monotonic() - t0
 
     await server.close()
 
     total_sent = sum(s for s, _ in results)
     total_recv = sum(r for _, r in results)
-    print(f"\n--- Summary ---")
+    print("\n--- Summary ---")
     print(f"Clients: {args.clients}")
     print(f"Sent:    {total_sent}")
     print(f"Received:{total_recv}")

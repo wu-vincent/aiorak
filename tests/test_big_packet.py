@@ -1,7 +1,6 @@
 """Port of BigPacketTest.cpp — send large packets via RELIABLE_ORDERED and verify integrity."""
 
 import asyncio
-import math
 
 import pytest
 

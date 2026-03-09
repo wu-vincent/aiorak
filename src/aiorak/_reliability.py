@@ -17,13 +17,10 @@ and by ``on_datagram_received()`` for inbound traffic.
 """
 
 import heapq
-import time as _time
 from dataclasses import dataclass, field
 
-from ._bitstream import BitStream
-from ._congestion import CongestionController, seq_greater_than
+from ._congestion import CongestionController
 from ._constants import (
-    MAXIMUM_MTU,
     NUMBER_OF_ORDERED_STREAMS,
     SEQ_NUM_MAX,
     UDP_HEADER_SIZE,
@@ -35,14 +32,13 @@ from ._wire import (
     decode_datagram,
     encode_ack,
     encode_datagram,
-    encode_message_frame,
     encode_nak,
 )
-
 
 # ---------------------------------------------------------------------------
 # Internal packet tracking
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _InFlightDatagram:
@@ -116,9 +112,7 @@ class ReliabilityLayer:
         self._received_datagrams: set[int] = set()
 
         # Ordering heaps per channel: list of (ordering_index, data_bytes)
-        self._ordering_heaps: list[list[tuple[int, bytes]]] = [
-            [] for _ in range(NUMBER_OF_ORDERED_STREAMS)
-        ]
+        self._ordering_heaps: list[list[tuple[int, bytes]]] = [[] for _ in range(NUMBER_OF_ORDERED_STREAMS)]
         self._expected_ordering_index: list[int] = [0] * NUMBER_OF_ORDERED_STREAMS
 
         # Sequencing: highest seen index per channel
@@ -541,7 +535,8 @@ class ReliabilityLayer:
             self._next_reliable_num += 1
 
         ordering_index, sequencing_index = self._advance_ordering_counters(
-            reliability, channel,
+            reliability,
+            channel,
         )
         frame.ordering_index = ordering_index
         frame.sequencing_index = sequencing_index
@@ -569,12 +564,13 @@ class ReliabilityLayer:
         fragments: list[bytes] = []
         offset = 0
         while offset < len(data):
-            fragments.append(data[offset: offset + max_payload])
+            fragments.append(data[offset : offset + max_payload])
             offset += max_payload
 
         total = len(fragments)
         ordering_index, sequencing_index = self._advance_ordering_counters(
-            reliability, channel,
+            reliability,
+            channel,
         )
 
         for i, chunk in enumerate(fragments):

@@ -127,10 +127,7 @@ class Client:
     @property
     def is_connected(self) -> bool:
         """``True`` if the client is fully connected to the server."""
-        return (
-            self._connection is not None
-            and self._connection.state == ConnectionState.CONNECTED
-        )
+        return self._connection is not None and self._connection.state == ConnectionState.CONNECTED
 
     @property
     def local_address(self) -> tuple[str, int]:

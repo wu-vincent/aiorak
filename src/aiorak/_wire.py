@@ -22,15 +22,15 @@ resulting categories applies:
 """
 
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from ._bitstream import BitStream
 from ._types import Reliability
 
-
 # ---------------------------------------------------------------------------
 # Range list helpers
 # ---------------------------------------------------------------------------
+
 
 def encode_range_list(bs: BitStream, ranges: list[tuple[int, int]]) -> None:
     """Encode a list of ``(min, max)`` inclusive ranges in RakNet format.
@@ -89,6 +89,7 @@ def decode_range_list(bs: BitStream) -> list[tuple[int, int]]:
 # Message frame
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class MessageFrame:
     """A single message packed inside a data datagram.
@@ -124,7 +125,6 @@ class MessageFrame:
     def __post_init__(self) -> None:
         if self.data_bit_length == 0:
             self.data_bit_length = len(self.data) * 8
-
 
 
 def encode_message_frame(bs: BitStream, frame: MessageFrame) -> None:
@@ -261,6 +261,7 @@ def decode_message_frame(bs: BitStream) -> MessageFrame | None:
 # ---------------------------------------------------------------------------
 # Datagram-level encode / decode
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class DatagramHeader:

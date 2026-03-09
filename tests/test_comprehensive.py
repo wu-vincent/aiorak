@@ -9,7 +9,6 @@ import pytest
 import aiorak
 
 
-
 def force_close_transport(target):
     """Close the underlying UDP transport without graceful disconnect."""
     target._socket._transport.close()
@@ -53,9 +52,7 @@ async def test_comprehensive_stress(server_factory):
         try:
             if roll < 0.10:
                 # --- Connect a disconnected client (10%) ---
-                disconnected = [
-                    i for i in range(num_slots) if clients[i] is None
-                ]
+                disconnected = [i for i in range(num_slots) if clients[i] is None]
                 if disconnected:
                     idx = random.choice(disconnected)
                     try:
@@ -67,10 +64,7 @@ async def test_comprehensive_stress(server_factory):
 
             elif roll < 0.30:
                 # --- Send random data from a connected client (20%) ---
-                connected = [
-                    i for i in range(num_slots)
-                    if clients[i] is not None and clients[i].is_connected
-                ]
+                connected = [i for i in range(num_slots) if clients[i] is not None and clients[i].is_connected]
                 if connected:
                     idx = random.choice(connected)
                     size = random.randint(1, 512)
@@ -85,10 +79,7 @@ async def test_comprehensive_stress(server_factory):
 
             elif roll < 0.40:
                 # --- Gracefully close a connected client (10%) ---
-                connected = [
-                    i for i in range(num_slots)
-                    if clients[i] is not None and clients[i].is_connected
-                ]
+                connected = [i for i in range(num_slots) if clients[i] is not None and clients[i].is_connected]
                 if connected:
                     idx = random.choice(connected)
                     try:
@@ -102,10 +93,7 @@ async def test_comprehensive_stress(server_factory):
 
             elif roll < 0.45:
                 # --- Force-close a connected client (5%) ---
-                connected = [
-                    i for i in range(num_slots)
-                    if clients[i] is not None and clients[i].is_connected
-                ]
+                connected = [i for i in range(num_slots) if clients[i] is not None and clients[i].is_connected]
                 if connected:
                     idx = random.choice(connected)
                     try:

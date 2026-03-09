@@ -19,9 +19,7 @@ pytestmark = pytest.mark.asyncio
     ],
     ids=["64B-x128", "512B-x64", "4KB-x16"],
 )
-async def test_burst_reliable_ordered(
-    server_factory, client_factory, msg_size, msg_count
-):
+async def test_burst_reliable_ordered(server_factory, client_factory, msg_size, msg_count):
     """Send *msg_count* messages of *msg_size* bytes in a burst and verify
     that all echoed responses arrive in the correct order."""
     server = await server_factory()
@@ -50,6 +48,4 @@ async def test_burst_reliable_ordered(
     for expected_idx, data in enumerate(responses):
         assert len(data) == msg_size
         (received_idx,) = struct.unpack(">I", data[1:5])
-        assert received_idx == expected_idx, (
-            f"Out-of-order at position {expected_idx}: got index {received_idx}"
-        )
+        assert received_idx == expected_idx, f"Out-of-order at position {expected_idx}: got index {received_idx}"

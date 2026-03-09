@@ -1,6 +1,5 @@
 """Port of MessageSizeTest.cpp — send messages of various sizes and verify data integrity."""
 
-import asyncio
 import math
 
 import pytest

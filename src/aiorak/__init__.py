@@ -177,12 +177,14 @@ async def ping(
         remaining = len(data) - 33
         offline_data = bs.read_bytes(remaining) if remaining > 0 else b""
         latency_ms = (_time.monotonic() - send_time) * 1000.0
-        result_future.set_result(PingResponse(
-            latency_ms=latency_ms,
-            server_guid=server_guid,
-            data=offline_data,
-            address=addr,
-        ))
+        result_future.set_result(
+            PingResponse(
+                latency_ms=latency_ms,
+                server_guid=server_guid,
+                data=offline_data,
+                address=addr,
+            )
+        )
 
     loop = asyncio.get_running_loop()
     transport, _protocol = await loop.create_datagram_endpoint(

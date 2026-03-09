@@ -19,11 +19,10 @@ import random
 import time as _time
 from collections.abc import Awaitable, Callable
 
-from ._connection import Connection, ConnectionState, _Signal
 from ._bitstream import BitStream
+from ._connection import Connection, ConnectionState, _Signal
 from ._constants import (
     ID_OPEN_CONNECTION_REQUEST_1,
-    ID_OPEN_CONNECTION_REQUEST_2,
     ID_UNCONNECTED_PING,
     ID_UNCONNECTED_PING_OPEN_CONNECTIONS,
     ID_UNCONNECTED_PONG,
@@ -31,7 +30,6 @@ from ._constants import (
     OFFLINE_MAGIC,
 )
 from ._transport import RakNetTransport, UDPSocket
-from ._types import Reliability
 
 
 class Server:
@@ -228,10 +226,7 @@ class Server:
         if magic != OFFLINE_MAGIC:
             return
 
-        if (
-            msg_id == ID_UNCONNECTED_PING_OPEN_CONNECTIONS
-            and len(self._connections) >= self._max_connections
-        ):
+        if msg_id == ID_UNCONNECTED_PING_OPEN_CONNECTIONS and len(self._connections) >= self._max_connections:
             return
 
         pong = BitStream()

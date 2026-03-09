@@ -23,7 +23,7 @@ async def _send_packets(client: aiorak.Client, reliability: aiorak.Reliability):
     sent = 0
     deadline = asyncio.get_event_loop().time() + DURATION
     while sent < PACKET_COUNT and asyncio.get_event_loop().time() < deadline:
-        payload = struct.pack(">I", sent) + b"\xCC" * (PACKET_SIZE - 4)
+        payload = struct.pack(">I", sent) + b"\xcc" * (PACKET_SIZE - 4)
         await client.send(payload, reliability=reliability)
         sent += 1
         await asyncio.sleep(SEND_INTERVAL)
@@ -78,8 +78,7 @@ async def test_throughput_reliable(server_factory, client_factory):
     pps = len(responses) / t_elapsed
     bps = len(responses) * PACKET_SIZE / t_elapsed
     print(
-        f"\nRELIABLE throughput: {pps:.0f} pkt/s, "
-        f"{bps / 1024:.1f} KB/s ({len(responses)} packets in {t_elapsed:.2f}s)"
+        f"\nRELIABLE throughput: {pps:.0f} pkt/s, {bps / 1024:.1f} KB/s ({len(responses)} packets in {t_elapsed:.2f}s)"
     )
 
 
@@ -111,9 +110,7 @@ async def test_throughput_unreliable(server_factory, client_factory):
     t_elapsed = time.monotonic() - t_start
 
     min_expected = sent // 2
-    assert len(received) >= min_expected, (
-        f"UNRELIABLE: expected at least {min_expected} packets, got {len(received)}"
-    )
+    assert len(received) >= min_expected, f"UNRELIABLE: expected at least {min_expected} packets, got {len(received)}"
 
     for data in received:
         assert len(data) == PACKET_SIZE

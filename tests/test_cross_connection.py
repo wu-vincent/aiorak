@@ -12,12 +12,13 @@ import pytest
 import aiorak
 
 
-
 async def wait_for_peers(server, count, timeout=5.0):
     """Wait until server has at least count connected peers."""
+
     async def _wait():
         while len(server._peers) < count:
             await asyncio.sleep(0.02)
+
     await asyncio.wait_for(_wait(), timeout=timeout)
 
 
@@ -113,20 +114,12 @@ async def test_cross_connect_disconnect_cycle(server_factory):
             echo_a = await asyncio.wait_for(client_a.recv(), timeout=3.0)
             echo_b = await asyncio.wait_for(client_b.recv(), timeout=3.0)
 
-            assert echo_a == msg_a, (
-                f"Cycle {cycle}: client A expected {msg_a!r}, got {echo_a!r}"
-            )
-            assert echo_b == msg_b, (
-                f"Cycle {cycle}: client B expected {msg_b!r}, got {echo_b!r}"
-            )
+            assert echo_a == msg_a, f"Cycle {cycle}: client A expected {msg_a!r}, got {echo_a!r}"
+            assert echo_b == msg_b, f"Cycle {cycle}: client B expected {msg_b!r}, got {echo_b!r}"
 
             # Verify the servers received the data.
-            assert msg_a in received_b, (
-                f"Cycle {cycle}: server B did not receive message from client A"
-            )
-            assert msg_b in received_a, (
-                f"Cycle {cycle}: server A did not receive message from client B"
-            )
+            assert msg_a in received_b, f"Cycle {cycle}: server B did not receive message from client A"
+            assert msg_b in received_a, f"Cycle {cycle}: server A did not receive message from client B"
         finally:
             await asyncio.gather(client_a.close(), client_b.close())
 
