@@ -35,7 +35,7 @@ async def main():
                 rtts.append(resp.latency_ms)
                 print(
                     f"  ping {i + 1}/{args.count}: {resp.latency_ms:.2f} ms"
-                    f"  guid={resp.server_guid:#x}"
+                    f"  guid={resp.server_guid!r}"
                     f"  data={resp.data!r}"
                 )
             except asyncio.TimeoutError:
