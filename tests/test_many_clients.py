@@ -5,6 +5,7 @@ ManyClientsOneServerDeallocateTest, and ManyClientsOneServerDeallocateBlockingTe
 """
 
 import asyncio
+import sys
 import time
 
 import pytest
@@ -103,6 +104,30 @@ async def test_disconnect_reconnect_cycle(server_factory):
     await _close_all(clients)
 
 
+def _disable_udp_connreset(server):
+    """Prevent ICMP Port Unreachable errors from killing the server socket.
+
+    On Windows, sending UDP to a closed port causes ``WSAECONNRESET`` which
+    poisons the recv path.  ``SIO_UDP_CONNRESET`` disables this behaviour.
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    sock = server._socket._transport.get_extra_info("socket")
+    if sock is None:
+        return
+    SIO_UDP_CONNRESET = 0x9800000C
+    ret = ctypes.c_ulong(0)
+    ctypes.windll.ws2_32.WSAIoctl(
+        sock.fileno(),
+        SIO_UDP_CONNRESET,
+        ctypes.byref(ctypes.c_bool(False)),
+        ctypes.sizeof(ctypes.c_bool),
+        None, 0, ctypes.byref(ret), None, None,
+    )
+
+
 @pytest.mark.timeout(30)
 async def test_abrupt_disconnect(server_factory):
     """32 clients connect then have their transports forcefully closed.
@@ -110,8 +135,9 @@ async def test_abrupt_disconnect(server_factory):
     The server should detect the timeouts, then all clients reconnect.
     """
     server = await server_factory(
-        handler=_noop_handler, max_connections=NUM_CLIENTS + 10
+        handler=_noop_handler, max_connections=NUM_CLIENTS * 4
     )
+    _disable_udp_connreset(server)
     addr = server.local_address
 
     clients = await _connect_all(addr, NUM_CLIENTS)
@@ -120,15 +146,23 @@ async def test_abrupt_disconnect(server_factory):
 
     # Forcefully close all client transports.
     for c in clients:
-        force_close_transport(c)
+        c._socket._transport.close()
 
     # Wait for the server to detect the dropped connections.
+    # Must wait for both _peers and _connections to drain — stale entries
+    # in _connections block new connection acceptance.
     deadline = time.monotonic() + 15.0
-    while len(server._peers) > 0 and time.monotonic() < deadline:
+    while (
+        (len(server._peers) > 0 or len(server._connections) > 0)
+        and time.monotonic() < deadline
+    ):
         await asyncio.sleep(0.1)
 
     assert len(server._peers) == 0, (
         f"Server still has {len(server._peers)} peers after abrupt disconnect"
+    )
+    assert len(server._connections) == 0, (
+        f"Server still has {len(server._connections)} connections after abrupt disconnect"
     )
 
     # Reconnect all clients.
