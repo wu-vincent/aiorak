@@ -401,20 +401,17 @@ class ReliabilityLayer:
 
         rel = frame.reliability
 
-        if rel in (Reliability.UNRELIABLE, Reliability.RELIABLE):
+        if not rel.is_ordered:
             self._receive_queue.append((frame.data, 0))
 
-        elif rel in (Reliability.UNRELIABLE_SEQUENCED, Reliability.RELIABLE_SEQUENCED):
+        elif rel.is_sequenced:
             ch = frame.ordering_channel
             if frame.sequencing_index > self._highest_sequenced[ch]:
                 self._highest_sequenced[ch] = frame.sequencing_index
                 self._receive_queue.append((frame.data, ch))
             # else: stale packet, drop silently
 
-        elif rel in (
-            Reliability.RELIABLE_ORDERED,
-            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-        ):
+        else:  # ordered (non-sequenced)
             ch = frame.ordering_channel
             if frame.ordering_index == self._expected_ordering_index[ch]:
                 self._receive_queue.append((frame.data, ch))
@@ -427,10 +424,6 @@ class ReliabilityLayer:
                     self._ordering_heaps[ch],
                     (frame.ordering_index, frame.data),
                 )
-
-        else:
-            # ACK_RECEIPT variants without ordering
-            self._receive_queue.append((frame.data, 0))
 
     def _flush_ordering_heap(self, channel: int) -> None:
         """Deliver buffered ordered messages that are now sequential.
@@ -506,23 +499,17 @@ class ReliabilityLayer:
         ordering_index = 0
         sequencing_index = 0
 
-        if reliability in (Reliability.UNRELIABLE_SEQUENCED, Reliability.RELIABLE_SEQUENCED):
+        if reliability.is_sequenced:
             sequencing_index = self._next_sequencing_index[channel]
             self._next_sequencing_index[channel] += 1
 
-        if reliability in (
-            Reliability.UNRELIABLE_SEQUENCED,
-            Reliability.RELIABLE_SEQUENCED,
-            Reliability.RELIABLE_ORDERED,
-            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-        ):
+        if reliability.is_ordered:
             ordering_index = self._next_ordering_index[channel]
-            if reliability in (
-                Reliability.RELIABLE_ORDERED,
-                Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-            ):
+            if not reliability.is_sequenced:
+                # Ordered (non-sequenced) modes consume the ordering index
+                # and reset the sequencing counter per C++ behavior.
                 self._next_ordering_index[channel] += 1
-                self._next_sequencing_index[channel] = 0  # Reset per C++ behavior
+                self._next_sequencing_index[channel] = 0
 
         return ordering_index, sequencing_index
 
@@ -549,7 +536,7 @@ class ReliabilityLayer:
             ordering_channel=channel,
         )
 
-        if self._is_reliable(reliability):
+        if reliability.is_reliable:
             frame.reliable_message_number = self._next_reliable_num
             self._next_reliable_num += 1
 
@@ -595,7 +582,7 @@ class ReliabilityLayer:
                 reliability=reliability,
                 data=chunk,
                 data_bit_length=len(chunk) * 8,
-                reliable_message_number=self._next_reliable_num if self._is_reliable(reliability) else 0,
+                reliable_message_number=self._next_reliable_num if reliability.is_reliable else 0,
                 sequencing_index=sequencing_index,
                 ordering_index=ordering_index,
                 ordering_channel=channel,
@@ -603,24 +590,13 @@ class ReliabilityLayer:
                 split_packet_id=split_id,
                 split_packet_index=i,
             )
-            if self._is_reliable(reliability):
+            if reliability.is_reliable:
                 self._next_reliable_num += 1
             self._send_queue.append(frame)
 
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _is_reliable(r: Reliability) -> bool:
-        """Return ``True`` if *r* requires a reliable message number."""
-        return r in (
-            Reliability.RELIABLE,
-            Reliability.RELIABLE_SEQUENCED,
-            Reliability.RELIABLE_ORDERED,
-            Reliability.RELIABLE_WITH_ACK_RECEIPT,
-            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-        )
 
     def _max_payload_per_frame(self, reliability: Reliability) -> int:
         """Calculate the maximum user-data bytes per message frame.
@@ -676,16 +652,11 @@ class ReliabilityLayer:
         # 1 byte header (reliability + split bit + alignment)
         # 2 bytes data bit length
         size = 3 + len(frame.data)
-        if self._is_reliable(frame.reliability):
+        if frame.reliability.is_reliable:
             size += 3  # reliable message number
-        if frame.reliability in (Reliability.UNRELIABLE_SEQUENCED, Reliability.RELIABLE_SEQUENCED):
+        if frame.reliability.is_sequenced:
             size += 3  # sequencing index
-        if frame.reliability in (
-            Reliability.UNRELIABLE_SEQUENCED,
-            Reliability.RELIABLE_SEQUENCED,
-            Reliability.RELIABLE_ORDERED,
-            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-        ):
+        if frame.reliability.is_ordered:
             size += 4  # ordering index + channel
         if frame.split_packet_count > 0:
             size += 10  # split fields

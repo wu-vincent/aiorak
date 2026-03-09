@@ -42,6 +42,32 @@ class Reliability(enum.IntEnum):
     RELIABLE_ORDERED_WITH_ACK_RECEIPT = 7
     """Same as RELIABLE_ORDERED; the sender is notified on ACK."""
 
+    @property
+    def is_reliable(self) -> bool:
+        """Return ``True`` if this mode requires a reliable message number."""
+        return self in (
+            Reliability.RELIABLE,
+            Reliability.RELIABLE_SEQUENCED,
+            Reliability.RELIABLE_ORDERED,
+            Reliability.RELIABLE_WITH_ACK_RECEIPT,
+            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
+        )
+
+    @property
+    def is_sequenced(self) -> bool:
+        """Return ``True`` if this mode uses a sequencing index."""
+        return self in (Reliability.UNRELIABLE_SEQUENCED, Reliability.RELIABLE_SEQUENCED)
+
+    @property
+    def is_ordered(self) -> bool:
+        """Return ``True`` if this mode uses an ordering index + channel."""
+        return self in (
+            Reliability.UNRELIABLE_SEQUENCED,
+            Reliability.RELIABLE_SEQUENCED,
+            Reliability.RELIABLE_ORDERED,
+            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
+        )
+
 
 class Priority(enum.IntEnum):
     """Send-queue priority levels.

@@ -126,31 +126,6 @@ class MessageFrame:
             self.data_bit_length = len(self.data) * 8
 
 
-def _is_reliable(r: Reliability) -> bool:
-    """Return ``True`` if the reliability mode requires a reliable message number."""
-    return r in (
-        Reliability.RELIABLE,
-        Reliability.RELIABLE_SEQUENCED,
-        Reliability.RELIABLE_ORDERED,
-        Reliability.RELIABLE_WITH_ACK_RECEIPT,
-        Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-    )
-
-
-def _is_sequenced(r: Reliability) -> bool:
-    """Return ``True`` if the reliability mode uses a sequencing index."""
-    return r in (Reliability.UNRELIABLE_SEQUENCED, Reliability.RELIABLE_SEQUENCED)
-
-
-def _is_ordered(r: Reliability) -> bool:
-    """Return ``True`` if the reliability mode uses an ordering index + channel."""
-    return r in (
-        Reliability.UNRELIABLE_SEQUENCED,
-        Reliability.RELIABLE_SEQUENCED,
-        Reliability.RELIABLE_ORDERED,
-        Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-    )
-
 
 def encode_message_frame(bs: BitStream, frame: MessageFrame) -> None:
     """Serialize a :class:`MessageFrame` into *bs*.
@@ -185,17 +160,17 @@ def encode_message_frame(bs: BitStream, frame: MessageFrame) -> None:
     bs.write_uint16(frame.data_bit_length)
 
     # Reliable message number (uint24) — only for reliable modes
-    if _is_reliable(frame.reliability):
+    if frame.reliability.is_reliable:
         bs.write_uint24(frame.reliable_message_number)
 
     bs.align_write_to_byte()
 
     # Sequencing index (uint24) — only for sequenced modes
-    if _is_sequenced(frame.reliability):
+    if frame.reliability.is_sequenced:
         bs.write_uint24(frame.sequencing_index)
 
     # Ordering index (uint24) + channel (uint8) — for ordered/sequenced
-    if _is_ordered(frame.reliability):
+    if frame.reliability.is_ordered:
         bs.write_uint24(frame.ordering_index)
         bs.write_uint8(frame.ordering_channel)
 
@@ -239,20 +214,20 @@ def decode_message_frame(bs: BitStream) -> MessageFrame | None:
 
     # Reliable message number
     reliable_message_number = 0
-    if _is_reliable(reliability):
+    if reliability.is_reliable:
         reliable_message_number = bs.read_uint24()
 
     bs.align_read_to_byte()
 
     # Sequencing index
     sequencing_index = 0
-    if _is_sequenced(reliability):
+    if reliability.is_sequenced:
         sequencing_index = bs.read_uint24()
 
     # Ordering index + channel
     ordering_index = 0
     ordering_channel = 0
-    if _is_ordered(reliability):
+    if reliability.is_ordered:
         ordering_index = bs.read_uint24()
         ordering_channel = bs.read_uint8()
 
