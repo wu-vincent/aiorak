@@ -57,6 +57,9 @@ async def create_server(
     max_connections: int = 64,
     *,
     guid: int | None = None,
+    protocol_version: int | None = None,
+    max_mtu: int | None = None,
+    min_mtu: int | None = None,
 ) -> Server:
     """Create and start a RakNet server bound to *address*.
 
@@ -65,6 +68,9 @@ async def create_server(
         handler: Async callable invoked once per connected peer.
         max_connections: Maximum number of simultaneous peer connections.
         guid: Optional 64-bit server GUID.
+        protocol_version: RakNet protocol version for handshake validation.
+        max_mtu: Largest MTU accepted during handshake.
+        min_mtu: Smallest MTU accepted during handshake.
 
     Returns:
         A started :class:`Server` instance.
@@ -77,7 +83,14 @@ async def create_server(
 
         server = await aiorak.create_server(('0.0.0.0', 19132), handler)
     """
-    server = Server(address, handler, max_connections=max_connections, guid=guid)
+    kwargs: dict = {"max_connections": max_connections, "guid": guid}
+    if protocol_version is not None:
+        kwargs["protocol_version"] = protocol_version
+    if max_mtu is not None:
+        kwargs["max_mtu"] = max_mtu
+    if min_mtu is not None:
+        kwargs["min_mtu"] = min_mtu
+    server = Server(address, handler, **kwargs)
     await server.start()
     return server
 
@@ -87,6 +100,10 @@ async def connect(
     *,
     timeout: float = 10.0,
     guid: int | None = None,
+    protocol_version: int | None = None,
+    max_mtu: int | None = None,
+    min_mtu: int | None = None,
+    mtu_discovery_sizes: tuple[int, ...] | None = None,
 ) -> Client:
     """Connect to a RakNet server at *address*.
 
@@ -97,6 +114,11 @@ async def connect(
         address: ``(host, port)`` of the remote server.
         timeout: Maximum seconds to wait for the handshake to complete.
         guid: Optional 64-bit client GUID.
+        protocol_version: RakNet protocol version for handshake validation.
+        max_mtu: Largest MTU accepted during handshake.
+        min_mtu: Smallest MTU accepted during handshake.
+        mtu_discovery_sizes: MTU sizes attempted in order during handshake.
+            Defaults to ``(max_mtu, 1200, 576)``.
 
     Returns:
         A connected :class:`Client` instance.
@@ -110,7 +132,16 @@ async def connect(
         client = await aiorak.connect(('127.0.0.1', 19132))
         await client.send(b"hello")
     """
-    client = Client(address, guid=guid)
+    kwargs: dict = {"guid": guid}
+    if protocol_version is not None:
+        kwargs["protocol_version"] = protocol_version
+    if max_mtu is not None:
+        kwargs["max_mtu"] = max_mtu
+    if min_mtu is not None:
+        kwargs["min_mtu"] = min_mtu
+    if mtu_discovery_sizes is not None:
+        kwargs["mtu_discovery_sizes"] = mtu_discovery_sizes
+    client = Client(address, **kwargs)
     await client.connect(timeout=timeout)
     return client
 

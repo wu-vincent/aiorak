@@ -38,7 +38,6 @@ from ._constants import (
     ID_OPEN_CONNECTION_REQUEST_2,
     MAXIMUM_MTU,
     MINIMUM_MTU,
-    MTU_DISCOVERY_SIZES,
     OFFLINE_MAGIC,
     RAKNET_PROTOCOL_VERSION,
     UDP_HEADER_SIZE,
@@ -83,6 +82,11 @@ class Connection:
         is_server: ``True`` if we are the server side of this connection.
         mtu: Initial MTU to use (may be refined during handshake).
         timeout: Seconds of silence before declaring the connection lost.
+        protocol_version: RakNet protocol version for handshake validation.
+        max_mtu: Largest MTU accepted during handshake.
+        min_mtu: Smallest MTU accepted during handshake.
+        mtu_discovery_sizes: MTU sizes attempted in order during client
+            connection handshake.  Defaults to ``(max_mtu, 1200, 576)``.
     """
 
     def __init__(
@@ -93,6 +97,10 @@ class Connection:
         is_server: bool = False,
         mtu: int = MAXIMUM_MTU,
         timeout: float = DEFAULT_TIMEOUT,
+        protocol_version: int = RAKNET_PROTOCOL_VERSION,
+        max_mtu: int = MAXIMUM_MTU,
+        min_mtu: int = MINIMUM_MTU,
+        mtu_discovery_sizes: tuple[int, ...] | None = None,
     ) -> None:
         self.address = address
         self.guid = guid
@@ -101,6 +109,10 @@ class Connection:
         self.state = ConnectionState.DISCONNECTED
         self.mtu = mtu
         self.timeout = timeout
+        self._protocol_version = protocol_version
+        self._max_mtu = max_mtu
+        self._min_mtu = min_mtu
+        self._mtu_discovery_sizes = mtu_discovery_sizes if mtu_discovery_sizes is not None else (max_mtu, 1200, 576)
 
         self._cc = CongestionController(mtu)
         self._reliability = ReliabilityLayer(mtu, self._cc, timeout=timeout)
@@ -348,14 +360,14 @@ class Connection:
         Returns:
             The raw packet bytes, or ``None`` if all MTU sizes exhausted.
         """
-        if self._mtu_attempt_index >= len(MTU_DISCOVERY_SIZES):
+        if self._mtu_attempt_index >= len(self._mtu_discovery_sizes):
             return None
 
-        mtu = MTU_DISCOVERY_SIZES[self._mtu_attempt_index]
+        mtu = self._mtu_discovery_sizes[self._mtu_attempt_index]
         bs = BitStream()
         bs.write_uint8(ID_OPEN_CONNECTION_REQUEST_1)
         bs.write_bytes(OFFLINE_MAGIC)
-        bs.write_uint8(RAKNET_PROTOCOL_VERSION)
+        bs.write_uint8(self._protocol_version)
         # Pad to MTU (minus UDP header)
         target = mtu - UDP_HEADER_SIZE
         bs.pad_with_zero_to_byte_length(target)
@@ -427,8 +439,8 @@ class Connection:
             logger.warning("Open request 1 from %s: invalid magic", self.address)
             return None
         proto = bs.read_uint8()
-        if proto != RAKNET_PROTOCOL_VERSION:
-            logger.warning("Open request 1 from %s: protocol %d != %d", self.address, proto, RAKNET_PROTOCOL_VERSION)
+        if proto != self._protocol_version:
+            logger.warning("Open request 1 from %s: protocol %d != %d", self.address, proto, self._protocol_version)
             return None
 
         # MTU = total datagram size + UDP header
@@ -471,8 +483,8 @@ class Connection:
         if has_security:
             return None  # Security not supported
         mtu = bs.read_uint16()
-        if not (MINIMUM_MTU <= mtu <= MAXIMUM_MTU):
-            logger.warning("Open reply 1 from %s: MTU %d out of range [%d, %d]", self.address, mtu, MINIMUM_MTU, MAXIMUM_MTU)
+        if not (self._min_mtu <= mtu <= self._max_mtu):
+            logger.warning("Open reply 1 from %s: MTU %d out of range [%d, %d]", self.address, mtu, self._min_mtu, self._max_mtu)
             return None
         self.mtu = mtu
 
@@ -512,8 +524,8 @@ class Connection:
             return None
         _server_addr = bs.read_address()
         mtu = bs.read_uint16()
-        if not (MINIMUM_MTU <= mtu <= MAXIMUM_MTU):
-            logger.warning("Open request 2 from %s: MTU %d out of range [%d, %d]", self.address, mtu, MINIMUM_MTU, MAXIMUM_MTU)
+        if not (self._min_mtu <= mtu <= self._max_mtu):
+            logger.warning("Open request 2 from %s: MTU %d out of range [%d, %d]", self.address, mtu, self._min_mtu, self._max_mtu)
             return None
         self.remote_guid = bs.read_uint64()
         self.mtu = mtu

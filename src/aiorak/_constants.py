@@ -51,9 +51,6 @@ MINIMUM_MTU: int = 400
 UDP_HEADER_SIZE: int = 28
 """IPv4 header (20 B) + UDP header (8 B) overhead subtracted from the MTU."""
 
-MTU_DISCOVERY_SIZES: tuple[int, ...] = (1492, 1200, 576)
-"""MTU sizes attempted in order during client connection handshake."""
-
 # ---------------------------------------------------------------------------
 # Reliability layer limits
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator
 logger = logging.getLogger(__name__)
 
 from ._connection import Connection, ConnectionState, _Signal
-from ._constants import MAXIMUM_MTU
+from ._constants import MAXIMUM_MTU, MINIMUM_MTU, RAKNET_PROTOCOL_VERSION
 from ._transport import RakNetTransport, UDPSocket
 from ._types import Reliability
 
@@ -35,15 +35,28 @@ class Client:
     Args:
         server_address: ``(host, port)`` of the server to connect to.
         guid: 64-bit client GUID.  Generated randomly if not supplied.
+        protocol_version: RakNet protocol version for handshake validation.
+        max_mtu: Largest MTU accepted during handshake.
+        min_mtu: Smallest MTU accepted during handshake.
+        mtu_discovery_sizes: MTU sizes attempted in order during connection
+            handshake.  Defaults to ``(max_mtu, 1200, 576)``.
     """
 
     def __init__(
         self,
         server_address: tuple[str, int],
         guid: int | None = None,
+        protocol_version: int = RAKNET_PROTOCOL_VERSION,
+        max_mtu: int = MAXIMUM_MTU,
+        min_mtu: int = MINIMUM_MTU,
+        mtu_discovery_sizes: tuple[int, ...] | None = None,
     ) -> None:
         self._server_address = server_address
         self._guid = guid if guid is not None else random.getrandbits(64)
+        self._protocol_version = protocol_version
+        self._max_mtu = max_mtu
+        self._min_mtu = min_mtu
+        self._mtu_discovery_sizes = mtu_discovery_sizes if mtu_discovery_sizes is not None else (max_mtu, 1200, 576)
 
         self._connection: Connection | None = None
         self._socket: UDPSocket | None = None
@@ -76,7 +89,11 @@ class Client:
             address=self._server_address,
             guid=self._guid,
             is_server=False,
-            mtu=MAXIMUM_MTU,
+            mtu=self._max_mtu,
+            protocol_version=self._protocol_version,
+            max_mtu=self._max_mtu,
+            min_mtu=self._min_mtu,
+            mtu_discovery_sizes=self._mtu_discovery_sizes,
         )
 
         now = _time.monotonic()

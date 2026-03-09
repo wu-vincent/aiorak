@@ -30,7 +30,9 @@ from ._constants import (
     ID_UNCONNECTED_PING_OPEN_CONNECTIONS,
     ID_UNCONNECTED_PONG,
     MAXIMUM_MTU,
+    MINIMUM_MTU,
     OFFLINE_MAGIC,
+    RAKNET_PROTOCOL_VERSION,
 )
 from ._transport import RakNetTransport, UDPSocket
 
@@ -43,6 +45,9 @@ class Server:
         handler: Async callable ``(Connection) -> None`` invoked for each new peer.
         max_connections: Maximum number of simultaneous peer connections.
         guid: 64-bit server GUID.  Generated randomly if not supplied.
+        protocol_version: RakNet protocol version for handshake validation.
+        max_mtu: Largest MTU accepted during handshake.
+        min_mtu: Smallest MTU accepted during handshake.
     """
 
     def __init__(
@@ -51,11 +56,17 @@ class Server:
         handler: Callable[[Connection], Awaitable[None]],
         max_connections: int = 64,
         guid: int | None = None,
+        protocol_version: int = RAKNET_PROTOCOL_VERSION,
+        max_mtu: int = MAXIMUM_MTU,
+        min_mtu: int = MINIMUM_MTU,
     ) -> None:
         self._local_address = local_address
         self._handler = handler
         self._max_connections = max_connections
         self._guid = guid if guid is not None else random.getrandbits(64)
+        self._protocol_version = protocol_version
+        self._max_mtu = max_mtu
+        self._min_mtu = min_mtu
 
         self._connections: dict[tuple[str, int], Connection] = {}
         self._peers: dict[tuple[str, int], Connection] = {}
@@ -177,7 +188,10 @@ class Server:
                     address=addr,
                     guid=self._guid,
                     is_server=True,
-                    mtu=MAXIMUM_MTU,
+                    mtu=self._max_mtu,
+                    protocol_version=self._protocol_version,
+                    max_mtu=self._max_mtu,
+                    min_mtu=self._min_mtu,
                 )
                 conn._system_index = len(self._connections)
                 self._connections[addr] = conn
