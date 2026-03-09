@@ -1,74 +1,96 @@
-"""Integration tests — multi-client connect + data flow."""
+"""Port of ServerClientTest.cpp — many clients connecting with bidirectional data flow."""
 
 import asyncio
 
 import pytest
 
 import aiorak
-from aiorak import Connection
-
-from .conftest import collect_packets, wait_for_peers
 
 
-class TestMultipleClients:
-    async def test_multiple_clients_connect(self, server_factory, client_factory):
-        """10 clients all connect to one server, verify server sees all peers."""
-        connected = asyncio.Queue()
 
-        async def handler(conn: Connection):
-            connected.put_nowait(conn.address)
-            async for data in conn:
-                pass
+async def wait_for_peers(server, count, timeout=5.0):
+    """Wait until server has at least count connected peers."""
+    async def _wait():
+        while len(server._peers) < count:
+            await asyncio.sleep(0.02)
+    await asyncio.wait_for(_wait(), timeout=timeout)
 
-        server = await server_factory(handler=handler, max_connections=10)
-        addr = server.local_address
 
-        clients = []
-        for _ in range(10):
-            cli = await client_factory(addr)
-            clients.append(cli)
+pytestmark = pytest.mark.asyncio
 
-        await wait_for_peers(server, 10, timeout=10.0)
-        assert connected.qsize() == 10
+NUM_CLIENTS_CONNECT = 100
+NUM_CLIENTS_DATA = 10
+NUM_MESSAGES = 10
 
-    async def test_bidirectional_data_flow(self, server_factory, client_factory):
-        """Server sends to all clients, each client sends to server."""
-        received_on_server = asyncio.Queue()
 
-        async def handler(conn: Connection):
-            async for data in conn:
-                received_on_server.put_nowait(data)
-                await conn.send(b"\x86reply")
+@pytest.mark.slow
+@pytest.mark.timeout(15)
+async def test_all_clients_connect(server_factory):
+    """100 clients connect to a single server and all are accepted."""
 
-        server = await server_factory(handler=handler, max_connections=5)
-        addr = server.local_address
+    async def _noop_handler(conn):
+        async for _ in conn:
+            pass
 
-        clients = []
-        for _ in range(5):
-            cli = await client_factory(addr)
-            clients.append(cli)
+    server = await server_factory(
+        handler=_noop_handler, max_connections=NUM_CLIENTS_CONNECT + 10
+    )
+    addr = server.local_address
 
-        await wait_for_peers(server, 5, timeout=5.0)
+    # Connect all clients in parallel.
+    clients = await asyncio.gather(
+        *(aiorak.connect(addr, timeout=10.0) for _ in range(NUM_CLIENTS_CONNECT))
+    )
 
-        # Each client sends a message to the server
-        for i, cli in enumerate(clients):
-            await cli.send(b"\x86client" + i.to_bytes(1, "big"))
+    try:
+        await wait_for_peers(server, NUM_CLIENTS_CONNECT, timeout=10.0)
+        assert len(server._peers) == NUM_CLIENTS_CONNECT
+    finally:
+        await asyncio.gather(*(c.close() for c in clients))
 
-        # Wait for server to receive all messages
-        for _ in range(5):
-            await asyncio.wait_for(received_on_server.get(), timeout=5.0)
 
-        # Each client should receive a reply
-        for cli in clients:
-            packets = await collect_packets(cli, count=1, timeout=5.0)
-            assert len(packets) == 1
-            assert packets[0] == b"\x86reply"
+@pytest.mark.timeout(10)
+async def test_bidirectional_data_flow(server_factory):
+    """10 clients each send 10 messages and receive echoed responses.
 
-    async def test_client_send_receive_round_trip(self, server_and_client):
-        """Client sends, server echoes (default handler), client receives reply."""
-        server, client, addr = server_and_client
+    After the data exchange, verify that no connections were lost.
+    """
+    server = await server_factory(max_connections=NUM_CLIENTS_DATA + 10)
+    addr = server.local_address
 
-        await client.send(b"\x86ping")
+    clients = await asyncio.gather(
+        *(aiorak.connect(addr, timeout=5.0) for _ in range(NUM_CLIENTS_DATA))
+    )
 
-        packets = await collect_packets(client, count=1, timeout=5.0)
-        assert packets[0] == b"\x86ping"
+    try:
+        await wait_for_peers(server, NUM_CLIENTS_DATA, timeout=5.0)
+
+        async def _client_roundtrip(client: aiorak.Client, client_id: int):
+            """Send NUM_MESSAGES messages and collect all echoed replies."""
+            received: list[bytes] = []
+            for i in range(NUM_MESSAGES):
+                payload = f"client{client_id}-msg{i}".encode()
+                await client.send(
+                    payload, reliability=aiorak.Reliability.RELIABLE_ORDERED
+                )
+
+            for _ in range(NUM_MESSAGES):
+                data = await asyncio.wait_for(client.recv(), timeout=3.0)
+                received.append(data)
+
+            # Verify all messages echoed back correctly and in order.
+            for i, data in enumerate(received):
+                expected = f"client{client_id}-msg{i}".encode()
+                assert data == expected, (
+                    f"Client {client_id} expected {expected!r} at index {i}, "
+                    f"got {data!r}"
+                )
+
+        await asyncio.gather(
+            *(_client_roundtrip(c, idx) for idx, c in enumerate(clients))
+        )
+
+        # Verify no connections were lost during the exchange.
+        assert len(server._peers) == NUM_CLIENTS_DATA
+    finally:
+        await asyncio.gather(*(c.close() for c in clients))

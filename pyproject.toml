@@ -33,6 +33,7 @@ Repository = "https://github.com/MagicDroidX/aiorak"
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-xdist>=3.0",
     "ruff>=0.9",
 ]
 
@@ -43,3 +44,7 @@ lint.extend-select = ["I"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "timeout: set a timeout for the test (informational only)",
+]

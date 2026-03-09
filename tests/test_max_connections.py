@@ -1,41 +1,55 @@
-"""Integration tests — connection limit enforcement."""
+"""Port of MaximumConnectTest.cpp — verify that max_connections is enforced."""
 
 import asyncio
 
 import pytest
 
 import aiorak
-from aiorak import Connection
-
-from .conftest import wait_for_peers
 
 
-class TestMaxConnections:
-    async def test_max_connections_enforced(self, server_factory):
-        """Server with max_connections=3, try connecting 5 clients, verify only 3 succeed."""
-        async def handler(conn: Connection):
-            async for data in conn:
-                pass
 
-        server = await server_factory(handler=handler, max_connections=3)
-        addr = server.local_address
+async def wait_for_peers(server, count, timeout=5.0):
+    """Wait until server has at least count connected peers."""
+    async def _wait():
+        while len(server._peers) < count:
+            await asyncio.sleep(0.02)
+    await asyncio.wait_for(_wait(), timeout=timeout)
 
-        connected: list[aiorak.Client] = []
-        failed: list[Exception] = []
 
-        for _ in range(5):
-            try:
-                cli = await aiorak.connect(addr, timeout=2.0)
-                connected.append(cli)
-            except (asyncio.TimeoutError, OSError) as exc:
-                failed.append(exc)
+pytestmark = pytest.mark.asyncio
 
-        # At most 3 should have connected
-        assert len(connected) <= 3
 
-        # Verify server has at most 3 peers
-        assert len(server._peers) <= 3
+async def test_connect_up_to_max(server_factory, client_factory):
+    """All clients connect successfully when count == max_connections."""
+    max_conn = 4
+    server = await server_factory(max_connections=max_conn)
+    addr = server.local_address
 
-        # Cleanup
-        for cli in connected:
-            await cli.close()
+    clients = []
+    for _ in range(max_conn):
+        clients.append(await client_factory(addr))
+
+    await wait_for_peers(server, max_conn)
+    assert len(server._peers) == max_conn
+
+
+async def test_reject_beyond_max(server_factory, client_factory):
+    """A client connecting beyond max_connections is rejected."""
+    max_conn = 4
+    server = await server_factory(max_connections=max_conn)
+    addr = server.local_address
+
+    # Fill all slots
+    clients = []
+    for _ in range(max_conn):
+        clients.append(await client_factory(addr))
+
+    await wait_for_peers(server, max_conn)
+    assert len(server._peers) == max_conn
+
+    # The 5th connection should fail with a short timeout
+    with pytest.raises(TimeoutError):
+        await aiorak.connect(addr, timeout=2.0)
+
+    # Server should still have exactly max_conn peers
+    assert len(server._peers) == max_conn

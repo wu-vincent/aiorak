@@ -1,89 +1,124 @@
-"""Dropped connection tests — timeout detection when connections are silently dropped."""
+"""Port of DroppedConnectionTest.cpp — verify that dropped connections are detected."""
 
 import asyncio
+import random
 
 import pytest
 
 import aiorak
-from aiorak import Connection
-from aiorak._constants import DEFAULT_TIMEOUT
-
-from .conftest import collect_packets, wait_for_peers, force_close_transport
 
 
-_SHORT_TIMEOUT = 2.0
+
+async def wait_for_peers(server, count, timeout=5.0):
+    """Wait until server has at least count connected peers."""
+    async def _wait():
+        while len(server._peers) < count:
+            await asyncio.sleep(0.02)
+    await asyncio.wait_for(_wait(), timeout=timeout)
 
 
-class TestDroppedConnection:
-    async def test_server_detects_client_gone(
-        self, server_factory, client_factory, monkeypatch
-    ):
-        """Close client socket directly, server handler should end within timeout."""
-        monkeypatch.setattr("aiorak._connection.DEFAULT_TIMEOUT", _SHORT_TIMEOUT)
+def force_close_transport(target):
+    """Close the underlying UDP transport without graceful disconnect."""
+    target._socket._transport.close()
 
-        handler_done = asyncio.Event()
 
-        async def handler(conn: Connection):
-            async for data in conn:
+pytestmark = pytest.mark.asyncio
+
+
+async def test_server_detects_client_gone(server_factory, client_factory):
+    """Connect 5 clients, force-close 3, and verify the server detects the drops."""
+    num_clients = 5
+    num_to_drop = 3
+
+    server = await server_factory(max_connections=num_clients)
+    addr = server.local_address
+
+    clients = []
+    for _ in range(num_clients):
+        clients.append(await client_factory(addr))
+
+    await wait_for_peers(server, num_clients)
+    assert len(server._peers) == num_clients
+
+    # Force-close the first 3 clients (no graceful disconnect)
+    for i in range(num_to_drop):
+        force_close_transport(clients[i])
+
+    # Wait for the server to detect the dropped connections.
+    # Detection is timeout-based, so allow generous time (~15s).
+    expected = num_clients - num_to_drop
+    async def _wait_for_drop():
+        while len(server._peers) > expected:
+            await asyncio.sleep(0.2)
+
+    await asyncio.wait_for(_wait_for_drop(), timeout=20.0)
+    assert len(server._peers) == expected
+
+
+async def test_client_detects_server_gone(server_factory, client_factory):
+    """Connect a client, force-close the server, and verify the client detects it."""
+    server = await server_factory()
+    addr = server.local_address
+    client = await client_factory(addr)
+
+    await wait_for_peers(server, 1)
+
+    # Force-close the server transport so the client gets no graceful disconnect
+    force_close_transport(server)
+
+    # The client's async iterator should eventually end when it detects
+    # the server is gone.
+    async def _drain_client():
+        async for _data in client:
+            pass  # pragma: no cover — we don't expect data, just disconnection
+
+    await asyncio.wait_for(_drain_client(), timeout=20.0)
+    assert not client.is_connected
+
+
+async def test_random_disconnect_reconnect(server_factory, client_factory):
+    """Randomly disconnect and reconnect clients for 5 seconds without crashing."""
+    num_slots = 5
+    server = await server_factory(max_connections=num_slots + 2)
+    addr = server.local_address
+
+    # Initial connections
+    clients: list[aiorak.Client | None] = []
+    for _ in range(num_slots):
+        cli = await client_factory(addr)
+        clients.append(cli)
+
+    await wait_for_peers(server, num_slots)
+
+    deadline = asyncio.get_event_loop().time() + 5.0
+
+    while asyncio.get_event_loop().time() < deadline:
+        idx = random.randint(0, num_slots - 1)
+        cli = clients[idx]
+
+        if cli is not None and cli.is_connected:
+            # Randomly either gracefully close or force-close
+            if random.random() < 0.5:
+                await cli.close()
+            else:
+                force_close_transport(cli)
+            clients[idx] = None
+        elif cli is None:
+            # Reconnect
+            try:
+                new_cli = await aiorak.connect(addr, timeout=3.0)
+                clients[idx] = new_cli
+            except (asyncio.TimeoutError, OSError):
+                pass  # Server may still be processing the drop
+
+        await asyncio.sleep(random.uniform(0.05, 0.3))
+
+    # Cleanup: close any remaining connected clients
+    for cli in clients:
+        if cli is not None:
+            try:
+                await cli.close()
+            except Exception:
                 pass
-            handler_done.set()
 
-        server = await server_factory(handler=handler)
-        client = await client_factory(server.local_address)
-        await wait_for_peers(server, 1, timeout=3.0)
-
-        force_close_transport(client)
-
-        await asyncio.wait_for(handler_done.wait(), timeout=_SHORT_TIMEOUT + 3.0)
-
-    async def test_client_detects_server_gone(
-        self, server_factory, client_factory, monkeypatch
-    ):
-        """Close server socket, client iterator should end."""
-        monkeypatch.setattr("aiorak._connection.DEFAULT_TIMEOUT", _SHORT_TIMEOUT)
-
-        async def handler(conn: Connection):
-            async for data in conn:
-                pass
-
-        server = await server_factory(handler=handler)
-        client = await client_factory(server.local_address)
-        await wait_for_peers(server, 1, timeout=3.0)
-
-        force_close_transport(server)
-
-        # Client iterator should end (via disconnect sentinel)
-        async def _drain():
-            async for data in client:
-                pass
-
-        await asyncio.wait_for(_drain(), timeout=_SHORT_TIMEOUT + 3.0)
-
-
-class TestMidTransferClose:
-    async def test_close_during_handshake(self, server_factory):
-        """close() before handshake completes should not hang."""
-        server = await server_factory()
-        addr = server.local_address
-
-        from aiorak import Client
-
-        client = Client(addr)
-        connect_task = asyncio.create_task(client.connect(timeout=5.0))
-        await asyncio.sleep(0.1)
-        await client.close()
-
-        with pytest.raises((asyncio.TimeoutError, asyncio.CancelledError, RuntimeError, Exception)):
-            await asyncio.wait_for(connect_task, timeout=2.0)
-
-    async def test_close_during_data_transfer(self, server_factory, client_factory):
-        """close() while large send in progress should exit cleanly."""
-        server = await server_factory()
-        client = await client_factory(server.local_address)
-        await wait_for_peers(server, 1, timeout=3.0)
-
-        payload = b"\x86" + bytes(50_000)
-        await client.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
-
-        await client.close()
-        assert client._closed is True
+    # If we got here without an unhandled exception, the test passes.

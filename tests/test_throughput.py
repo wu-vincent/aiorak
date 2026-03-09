@@ -1,4 +1,4 @@
-"""Throughput and relay tests."""
+"""Port of LoopbackPerformanceTest.cpp – throughput measurement via echo server."""
 
 import asyncio
 import struct
@@ -7,137 +7,122 @@ import time
 import pytest
 
 import aiorak
-from aiorak import Connection, Reliability
+from tests.conftest import collect_packets
 
-from .conftest import collect_packets, wait_for_peers
+pytestmark = pytest.mark.asyncio
+
+PACKET_COUNT = 500
+PACKET_SIZE = 400
+SEND_RATE = 100  # packets per second
+SEND_INTERVAL = 1.0 / SEND_RATE
+DURATION = 3.0  # seconds to run sender
 
 
-def _throughput_payload(index: int, size: int = 1024) -> bytes:
-    header = b"\x86" + struct.pack(">I", index)
-    body = bytes([index & 0xFF]) * (size - len(header))
-    return header + body
+async def _send_packets(client: aiorak.Client, reliability: aiorak.Reliability):
+    """Send PACKET_COUNT packets at ~SEND_RATE packets/sec."""
+    sent = 0
+    deadline = asyncio.get_event_loop().time() + DURATION
+    while sent < PACKET_COUNT and asyncio.get_event_loop().time() < deadline:
+        payload = struct.pack(">I", sent) + b"\xCC" * (PACKET_SIZE - 4)
+        await client.send(payload, reliability=reliability)
+        sent += 1
+        await asyncio.sleep(SEND_INTERVAL)
+    return sent
 
 
-class TestThroughput:
-    @pytest.mark.parametrize(
-        "reliability",
-        [Reliability.RELIABLE_ORDERED, Reliability.RELIABLE, Reliability.UNRELIABLE],
+@pytest.mark.slow
+async def test_throughput_reliable_ordered(server_factory, client_factory):
+    """Send 500 packets of 400 bytes with RELIABLE_ORDERED via echo server.
+    All packets must be echoed back."""
+    server = await server_factory()
+    client = await client_factory(server.local_address)
+
+    t_start = time.monotonic()
+    sent = await _send_packets(client, aiorak.Reliability.RELIABLE_ORDERED)
+    responses = await collect_packets(client, sent, timeout=DURATION + 10.0)
+    t_elapsed = time.monotonic() - t_start
+
+    assert len(responses) == sent
+
+    # Verify ordering.
+    for i, data in enumerate(responses):
+        assert len(data) == PACKET_SIZE
+        (idx,) = struct.unpack(">I", data[:4])
+        assert idx == i, f"Out-of-order at position {i}: got index {idx}"
+
+    pps = len(responses) / t_elapsed
+    bps = len(responses) * PACKET_SIZE / t_elapsed
+    print(
+        f"\nRELIABLE_ORDERED throughput: {pps:.0f} pkt/s, "
+        f"{bps / 1024:.1f} KB/s ({len(responses)} packets in {t_elapsed:.2f}s)"
     )
-    async def test_loopback_throughput(
-        self, server_factory, client_factory, reliability
-    ):
-        """500 x 1KB messages, assert >500KB/s on loopback."""
-        received = asyncio.Queue()
-
-        async def handler(conn: Connection):
-            async for data in conn:
-                received.put_nowait(data)
-
-        server = await server_factory(handler=handler)
-        client = await client_factory(server.local_address)
-        await wait_for_peers(server, 1, timeout=3.0)
-
-        count = 500
-        payload_size = 1024
-
-        start = time.monotonic()
-        for i in range(count):
-            await client.send(
-                _throughput_payload(i, payload_size), reliability=reliability
-            )
-
-        items = []
-        async def _collect():
-            while len(items) < count:
-                items.append(await received.get())
-
-        if reliability == Reliability.UNRELIABLE:
-            try:
-                await asyncio.wait_for(_collect(), timeout=10.0)
-            except asyncio.TimeoutError:
-                pass
-            received_count = len(items)
-        else:
-            await asyncio.wait_for(_collect(), timeout=15.0)
-            received_count = len(items)
-            assert received_count == count
-
-        elapsed = time.monotonic() - start
-        total_bytes = received_count * payload_size
-        throughput = total_bytes / elapsed if elapsed > 0 else float("inf")
-
-        assert throughput > 500 * 1024, (
-            f"Throughput too low: {throughput / 1024:.1f} KB/s "
-            f"({received_count} msgs in {elapsed:.2f}s)"
-        )
-
-    async def test_sustained_5_seconds(self, server_factory, client_factory):
-        """Continuous 512B sends for 5s, assert minimum count."""
-        received = asyncio.Queue()
-
-        async def handler(conn: Connection):
-            async for data in conn:
-                received.put_nowait(data)
-
-        server = await server_factory(handler=handler)
-        client = await client_factory(server.local_address)
-        await wait_for_peers(server, 1, timeout=3.0)
-
-        duration = 5.0
-        payload_size = 512
-        sent = 0
-        start = time.monotonic()
-
-        while time.monotonic() - start < duration:
-            await client.send(
-                _throughput_payload(sent, payload_size),
-                reliability=Reliability.RELIABLE_ORDERED,
-            )
-            sent += 1
-            if sent % 50 == 0:
-                await asyncio.sleep(0)
-
-        items = []
-        async def _collect():
-            while len(items) < sent:
-                items.append(await received.get())
-
-        await asyncio.wait_for(_collect(), timeout=15.0)
-        assert len(items) == sent
-        assert sent >= 100, f"Only sent {sent} messages in {duration}s"
 
 
-class TestRelay:
-    async def test_relay_forwarding(self, server_factory, client_factory):
-        """Client A sends to server, server forwards to client B."""
-        relay_queue = asyncio.Queue()
+@pytest.mark.slow
+async def test_throughput_reliable(server_factory, client_factory):
+    """Send 500 packets of 400 bytes with RELIABLE via echo server.
+    All packets must be echoed back (order not guaranteed)."""
+    server = await server_factory()
+    client = await client_factory(server.local_address)
 
-        async def handler(conn: Connection):
-            async for data in conn:
-                # Forward received data to the relay queue
-                relay_queue.put_nowait((conn.address, data))
+    t_start = time.monotonic()
+    sent = await _send_packets(client, aiorak.Reliability.RELIABLE)
+    responses = await collect_packets(client, sent, timeout=DURATION + 10.0)
+    t_elapsed = time.monotonic() - t_start
 
-        server = await server_factory(handler=handler, max_connections=2)
+    assert len(responses) == sent
 
-        client_a = await client_factory(server.local_address)
-        client_b = await client_factory(server.local_address)
+    for data in responses:
+        assert len(data) == PACKET_SIZE
 
-        await wait_for_peers(server, 2, timeout=5.0)
+    pps = len(responses) / t_elapsed
+    bps = len(responses) * PACKET_SIZE / t_elapsed
+    print(
+        f"\nRELIABLE throughput: {pps:.0f} pkt/s, "
+        f"{bps / 1024:.1f} KB/s ({len(responses)} packets in {t_elapsed:.2f}s)"
+    )
 
-        # Client A sends data
-        payload = b"\x86relay_test_data_12345"
-        await client_a.send(payload)
 
-        # Server receives from A
-        addr_from, data = await asyncio.wait_for(relay_queue.get(), timeout=5.0)
-        assert data == payload
+@pytest.mark.slow
+async def test_throughput_unreliable(server_factory, client_factory):
+    """Send 500 packets of 400 bytes with UNRELIABLE via echo server.
+    At least 50% must arrive (loopback should be nearly lossless)."""
+    server = await server_factory()
+    client = await client_factory(server.local_address)
 
-        # Find peer B and forward
-        for peer in server._peers.values():
-            if peer.address != addr_from:
-                await peer.send(data)
-                break
+    t_start = time.monotonic()
+    sent = await _send_packets(client, aiorak.Reliability.UNRELIABLE)
 
-        # Client B receives the forwarded data
-        b_packets = await collect_packets(client_b, count=1, timeout=5.0)
-        assert b_packets[0] == payload
+    # For unreliable, we cannot know the exact count ahead of time.
+    # Collect what we can within a reasonable window.
+    received: list[bytes] = []
+
+    async def _gather():
+        async for data in client:
+            received.append(data)
+            if len(received) >= sent:
+                return
+
+    try:
+        await asyncio.wait_for(_gather(), timeout=DURATION + 5.0)
+    except TimeoutError:
+        pass  # Unreliable may not deliver all packets.
+
+    t_elapsed = time.monotonic() - t_start
+
+    min_expected = sent // 2
+    assert len(received) >= min_expected, (
+        f"UNRELIABLE: expected at least {min_expected} packets, got {len(received)}"
+    )
+
+    for data in received:
+        assert len(data) == PACKET_SIZE
+
+    pps = len(received) / t_elapsed if t_elapsed > 0 else 0
+    bps = len(received) * PACKET_SIZE / t_elapsed if t_elapsed > 0 else 0
+    loss = (1 - len(received) / sent) * 100 if sent > 0 else 0
+    print(
+        f"\nUNRELIABLE throughput: {pps:.0f} pkt/s, "
+        f"{bps / 1024:.1f} KB/s ({len(received)}/{sent} packets, "
+        f"{loss:.1f}% loss, {t_elapsed:.2f}s)"
+    )

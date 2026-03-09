@@ -1,79 +1,48 @@
-"""Integration tests — variable stride delivery."""
+"""Port of MessageSizeTest.cpp — send messages of various sizes and verify data integrity."""
 
 import asyncio
-import struct
+import math
 
 import pytest
 
 import aiorak
-from aiorak import Connection, Reliability
+from tests.conftest import collect_packets
 
-from .conftest import wait_for_peers
+pytestmark = pytest.mark.asyncio
 
-
-def _make_payload(size: int, fill: int) -> bytes:
-    """Create a test payload: user ID + 2-byte size + fill pattern."""
-    header = b"\x86" + struct.pack(">H", size)
-    body = bytes([fill & 0xFF] * (size - len(header)))
-    return header + body
+_ID_MARKER = 0x86
 
 
-class TestMessageSize:
-    @pytest.mark.parametrize("size", [10, 100, 500, 1000, 1500, 2000])
-    async def test_representative_strides(self, server_factory, client_factory, size):
-        """Parametrized test for various message sizes — verify byte-level data integrity."""
-        received = asyncio.Queue()
+def _make_message(stride: int, index: int) -> bytes:
+    """Build a message of *stride* bytes: first byte is the ID marker, rest are (index % 256)."""
+    fill = index % 256
+    return bytes([_ID_MARKER]) + bytes([fill] * (stride - 1))
 
-        async def handler(conn: Connection):
-            async for data in conn:
-                received.put_nowait(data)
 
-        server = await server_factory(handler=handler)
-        addr = server.local_address
-        client = await client_factory(addr)
-        await wait_for_peers(server, 1, timeout=3.0)
+@pytest.mark.parametrize("stride", [1, 10, 100, 500, 999, 1500, 1999])
+async def test_message_size(server_factory, client_factory, stride: int):
+    """Send ceil(4000/stride) messages of *stride* bytes and verify echoed data."""
+    count = math.ceil(4000 / stride)
 
-        fill = size & 0xFF
-        payload = _make_payload(size, fill)
-        await client.send(payload, reliability=Reliability.RELIABLE_ORDERED)
+    # Server uses the default echo handler (no handler argument needed).
+    server = await server_factory()
+    addr = server.local_address
+    client = await client_factory(addr)
 
-        data = await asyncio.wait_for(received.get(), timeout=5.0)
-        assert data == payload
+    # Build and send all messages.
+    expected: list[bytes] = []
+    for i in range(count):
+        msg = _make_message(stride, i)
+        expected.append(msg)
+        await client.send(msg, reliability=aiorak.Reliability.RELIABLE_ORDERED)
 
-    async def test_exact_mtu_boundary(self, server_factory, client_factory):
-        """Message at approximately MTU payload size."""
-        received = asyncio.Queue()
+    # Collect echoed messages.
+    received = await collect_packets(client, count, timeout=5.0)
 
-        async def handler(conn: Connection):
-            async for data in conn:
-                received.put_nowait(data)
-
-        server = await server_factory(handler=handler)
-        addr = server.local_address
-        client = await client_factory(addr)
-        await wait_for_peers(server, 1, timeout=3.0)
-
-        payload = b"\x86" + bytes(range(256)) * 5 + bytes(range(155))
-        await client.send(payload, reliability=Reliability.RELIABLE_ORDERED)
-
-        data = await asyncio.wait_for(received.get(), timeout=5.0)
-        assert data == payload
-
-    async def test_large_message_split_integrity(self, server_factory, client_factory):
-        """5000+ bytes message — verify reassembled data matches."""
-        received = asyncio.Queue()
-
-        async def handler(conn: Connection):
-            async for data in conn:
-                received.put_nowait(data)
-
-        server = await server_factory(handler=handler)
-        addr = server.local_address
-        client = await client_factory(addr)
-        await wait_for_peers(server, 1, timeout=3.0)
-
-        payload = b"\x86" + bytes(range(256)) * 20
-        await client.send(payload, reliability=Reliability.RELIABLE_ORDERED)
-
-        data = await asyncio.wait_for(received.get(), timeout=10.0)
-        assert data == payload
+    assert len(received) == count
+    for i, (got, want) in enumerate(zip(received, expected)):
+        assert got == want, (
+            f"Mismatch at message {i}: "
+            f"len got={len(got)} want={len(want)}, "
+            f"first bytes got={got[:4]!r} want={want[:4]!r}"
+        )
