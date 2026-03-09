@@ -484,6 +484,48 @@ class ReliabilityLayer:
     # Frame building helpers
     # ------------------------------------------------------------------
 
+    def _advance_ordering_counters(
+        self,
+        reliability: Reliability,
+        channel: int,
+    ) -> tuple[int, int]:
+        """Consume and return ordering/sequencing counters for a message.
+
+        This is the single source of truth for counter advancement, called
+        by both :meth:`_build_frame` (single messages) and
+        :meth:`_split_and_queue` (split fragments that share one set of
+        counters).
+
+        Args:
+            reliability: Delivery guarantee.
+            channel: Ordering channel (0–31).
+
+        Returns:
+            ``(ordering_index, sequencing_index)`` to stamp on the frame(s).
+        """
+        ordering_index = 0
+        sequencing_index = 0
+
+        if reliability in (Reliability.UNRELIABLE_SEQUENCED, Reliability.RELIABLE_SEQUENCED):
+            sequencing_index = self._next_sequencing_index[channel]
+            self._next_sequencing_index[channel] += 1
+
+        if reliability in (
+            Reliability.UNRELIABLE_SEQUENCED,
+            Reliability.RELIABLE_SEQUENCED,
+            Reliability.RELIABLE_ORDERED,
+            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
+        ):
+            ordering_index = self._next_ordering_index[channel]
+            if reliability in (
+                Reliability.RELIABLE_ORDERED,
+                Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
+            ):
+                self._next_ordering_index[channel] += 1
+                self._next_sequencing_index[channel] = 0  # Reset per C++ behavior
+
+        return ordering_index, sequencing_index
+
     def _build_frame(
         self,
         data: bytes,
@@ -507,33 +549,15 @@ class ReliabilityLayer:
             ordering_channel=channel,
         )
 
-        if reliability in (
-            Reliability.RELIABLE,
-            Reliability.RELIABLE_SEQUENCED,
-            Reliability.RELIABLE_ORDERED,
-            Reliability.RELIABLE_WITH_ACK_RECEIPT,
-            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-        ):
+        if self._is_reliable(reliability):
             frame.reliable_message_number = self._next_reliable_num
             self._next_reliable_num += 1
 
-        if reliability in (Reliability.UNRELIABLE_SEQUENCED, Reliability.RELIABLE_SEQUENCED):
-            frame.sequencing_index = self._next_sequencing_index[channel]
-            self._next_sequencing_index[channel] += 1
-
-        if reliability in (
-            Reliability.UNRELIABLE_SEQUENCED,
-            Reliability.RELIABLE_SEQUENCED,
-            Reliability.RELIABLE_ORDERED,
-            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-        ):
-            frame.ordering_index = self._next_ordering_index[channel]
-            if reliability in (
-                Reliability.RELIABLE_ORDERED,
-                Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-            ):
-                self._next_ordering_index[channel] += 1
-                self._next_sequencing_index[channel] = 0  # Reset per C++ behavior
+        ordering_index, sequencing_index = self._advance_ordering_counters(
+            reliability, channel,
+        )
+        frame.ordering_index = ordering_index
+        frame.sequencing_index = sequencing_index
 
         return frame
 
@@ -562,22 +586,9 @@ class ReliabilityLayer:
             offset += max_payload
 
         total = len(fragments)
-
-        # Capture ordering/sequencing counters directly (without _build_frame,
-        # which would waste a reliable message number on a prototype frame).
-        sequencing_index = 0
-        ordering_index = self._next_ordering_index[channel]
-
-        if reliability in (Reliability.UNRELIABLE_SEQUENCED, Reliability.RELIABLE_SEQUENCED):
-            sequencing_index = self._next_sequencing_index[channel]
-            self._next_sequencing_index[channel] += 1
-
-        if reliability in (
-            Reliability.RELIABLE_ORDERED,
-            Reliability.RELIABLE_ORDERED_WITH_ACK_RECEIPT,
-        ):
-            self._next_ordering_index[channel] += 1
-            self._next_sequencing_index[channel] = 0  # Reset per C++ behavior
+        ordering_index, sequencing_index = self._advance_ordering_counters(
+            reliability, channel,
+        )
 
         for i, chunk in enumerate(fragments):
             frame = MessageFrame(
