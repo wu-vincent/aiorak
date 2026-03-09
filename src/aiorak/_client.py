@@ -13,9 +13,12 @@ Example::
 """
 
 import asyncio
+import logging
 import random
 import time as _time
 from collections.abc import AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 from ._connection import Connection, ConnectionState, _Signal
 from ._constants import MAXIMUM_MTU
@@ -84,6 +87,7 @@ class Client:
 
         # Wait for connection to be established
         await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
+        logger.debug("Connected to %s", self._server_address)
 
     async def close(self) -> None:
         """Gracefully disconnect from the server and release resources."""
@@ -176,6 +180,12 @@ class Client:
         if self._connection is None:
             raise ConnectionError("Client is not connected")
         return await self._connection.recv()
+
+    async def __aenter__(self) -> "Client":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.close()
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         """Yield received data packets as raw bytes.

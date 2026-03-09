@@ -15,9 +15,12 @@ Example::
 """
 
 import asyncio
+import logging
 import random
 import time as _time
 from collections.abc import Awaitable, Callable
+
+logger = logging.getLogger(__name__)
 
 from ._bitstream import BitStream
 from ._connection import Connection, ConnectionState, _Signal
@@ -167,7 +170,9 @@ class Server:
                 return
             if len(data) >= 1 and data[0] == ID_OPEN_CONNECTION_REQUEST_1:
                 if len(self._connections) >= self._max_connections:
+                    logger.warning("Max connections reached, rejecting %s", addr)
                     return
+                logger.debug("New connection attempt from %s", addr)
                 conn = Connection(
                     address=addr,
                     guid=self._guid,
@@ -210,7 +215,7 @@ class Server:
         try:
             await self._handler(conn)
         except Exception:
-            pass
+            logger.exception("Handler for %s raised an exception", addr)
         finally:
             self._handler_tasks.pop(addr, None)
 

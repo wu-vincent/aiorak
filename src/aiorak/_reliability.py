@@ -17,10 +17,15 @@ and by ``on_datagram_received()`` for inbound traffic.
 """
 
 import heapq
+import logging
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 from ._congestion import CongestionController
 from ._constants import (
+    DEFAULT_RECEIVED_PACKET_QUEUE_SIZE,
+    DEFAULT_TIMEOUT,
     NUMBER_OF_ORDERED_STREAMS,
     SEQ_NUM_MAX,
     UDP_HEADER_SIZE,
@@ -59,6 +64,58 @@ class _InFlightDatagram:
     times_sent: int = 1
 
 
+class _ReceivedWindow:
+    """Sliding window tracker for received datagram sequence numbers.
+
+    Replaces an unbounded ``set[int]`` with a fixed-size window. Packets
+    below ``_base`` are considered already received. Matches the C++
+    ``hasReceivedPacketQueue`` approach with ``DEFAULT_HAS_RECEIVED_PACKET_QUEUE_SIZE``.
+
+    Args:
+        size: Window size (number of sequence numbers tracked).
+    """
+
+    __slots__ = ("_size", "_base", "_bits")
+
+    def __init__(self, size: int = DEFAULT_RECEIVED_PACKET_QUEUE_SIZE) -> None:
+        self._size = size
+        self._base: int = 0
+        self._bits: set[int] = set()
+
+    def __contains__(self, seq: int) -> bool:
+        """Return ``True`` if *seq* has been received."""
+        # Sequence numbers below the window base are considered received.
+        offset = (seq - self._base) & SEQ_NUM_MAX
+        if offset >= (SEQ_NUM_MAX + 1) // 2:
+            # seq is behind _base (wrapped), consider received
+            return True
+        if offset >= self._size:
+            # seq is ahead of the window — not yet received
+            return False
+        return seq in self._bits
+
+    def add(self, seq: int) -> None:
+        """Mark *seq* as received, advancing the window if needed."""
+        offset = (seq - self._base) & SEQ_NUM_MAX
+        if offset >= (SEQ_NUM_MAX + 1) // 2:
+            # seq is behind _base, already covered
+            return
+        # Advance window if seq is beyond current range
+        if offset >= self._size:
+            advance = offset - self._size + 1
+            new_base = (self._base + advance) & SEQ_NUM_MAX
+            # Remove entries that fell out of the window
+            to_remove = []
+            for s in self._bits:
+                s_offset = (s - new_base) & SEQ_NUM_MAX
+                if s_offset >= (SEQ_NUM_MAX + 1) // 2:
+                    to_remove.append(s)
+            for s in to_remove:
+                self._bits.discard(s)
+            self._base = new_base
+        self._bits.add(seq)
+
+
 @dataclass
 class _SplitTracker:
     """Tracks fragments of a single split message until reassembly.
@@ -69,6 +126,7 @@ class _SplitTracker:
         reliability: Reliability mode of the original message.
         ordering_index: Ordering index (if ordered).
         ordering_channel: Ordering channel (if ordered).
+        created_at: Monotonic timestamp when this tracker was created.
     """
 
     total: int
@@ -76,6 +134,7 @@ class _SplitTracker:
     reliability: Reliability = Reliability.RELIABLE
     ordering_index: int = 0
     ordering_channel: int = 0
+    created_at: float = 0.0
 
 
 class ReliabilityLayer:
@@ -90,9 +149,10 @@ class ReliabilityLayer:
             shared with this connection.
     """
 
-    def __init__(self, mtu: int, cc: CongestionController) -> None:
+    def __init__(self, mtu: int, cc: CongestionController, *, timeout: float = DEFAULT_TIMEOUT) -> None:
         self._mtu = mtu
         self._cc = cc
+        self._timeout = timeout
 
         # --- Send-side counters ---
         self._next_reliable_num: int = 0
@@ -109,7 +169,7 @@ class ReliabilityLayer:
         # --- Receive-side state ---
         self._ack_ranges: list[tuple[int, int]] = []
         self._nak_ranges: list[tuple[int, int]] = []
-        self._received_datagrams: set[int] = set()
+        self._received_datagrams: _ReceivedWindow = _ReceivedWindow()
 
         # Ordering heaps per channel: list of (ordering_index, data_bytes)
         self._ordering_heaps: list[list[tuple[int, bytes]]] = [[] for _ in range(NUMBER_OF_ORDERED_STREAMS)]
@@ -148,7 +208,14 @@ class ReliabilityLayer:
             data: Raw payload bytes.
             reliability: Delivery guarantee for this message.
             ordering_channel: Ordering channel (0–31) for ordered/sequenced modes.
+
+        Raises:
+            ValueError: If *ordering_channel* is not in ``[0, NUMBER_OF_ORDERED_STREAMS)``.
         """
+        if not (0 <= ordering_channel < NUMBER_OF_ORDERED_STREAMS):
+            raise ValueError(
+                f"ordering_channel must be in [0, {NUMBER_OF_ORDERED_STREAMS}), got {ordering_channel}"
+            )
         max_payload = self._max_payload_per_frame(reliability)
 
         if len(data) <= max_payload:
@@ -235,6 +302,7 @@ class ReliabilityLayer:
             inflight = self._in_flight.pop(seq)
             self._unacked_bytes -= inflight.byte_size
             self._cc.on_resend()
+            logger.debug("RTO resend for datagram seq=%d (sent %.3fs ago)", seq, now - inflight.send_time)
             # Re-queue frames for retransmission
             self._resend_queue.extend(inflight.frames)
 
@@ -366,9 +434,9 @@ class ReliabilityLayer:
 
         # Process each message frame
         for frame in frames:
-            self._handle_frame(frame)
+            self._handle_frame(frame, now)
 
-    def _handle_frame(self, frame: MessageFrame) -> None:
+    def _handle_frame(self, frame: MessageFrame, now: float) -> None:
         """Process a single decoded message frame.
 
         Handles split reassembly, then routes complete messages through
@@ -376,10 +444,11 @@ class ReliabilityLayer:
 
         Args:
             frame: The decoded message frame.
+            now: Current monotonic time in seconds.
         """
         # Split reassembly
         if frame.split_packet_count > 0:
-            data = self._reassemble_split(frame)
+            data = self._reassemble_split(frame, now)
             if data is None:
                 return  # Not all fragments received yet
             # Use the first fragment's metadata for the reassembled message
@@ -436,11 +505,16 @@ class ReliabilityLayer:
     # Split packet reassembly
     # ------------------------------------------------------------------
 
-    def _reassemble_split(self, frame: MessageFrame) -> bytes | None:
+    def _reassemble_split(self, frame: MessageFrame, now: float) -> bytes | None:
         """Accumulate a split fragment and return the reassembled payload when complete.
+
+        Evicts stale trackers (older than the connection timeout) before
+        creating new ones, matching C++ ``SplitPacketChannel::lastUpdateTime``
+        timeout behavior.
 
         Args:
             frame: A message frame with ``split_packet_count > 0``.
+            now: Current monotonic time in seconds.
 
         Returns:
             The full reassembled payload bytes, or ``None`` if not all
@@ -449,11 +523,21 @@ class ReliabilityLayer:
         sid = frame.split_packet_id
         tracker = self._split_trackers.get(sid)
         if tracker is None:
+            # Evict stale trackers before creating a new one
+            stale = [
+                k for k, t in self._split_trackers.items()
+                if now - t.created_at > self._timeout
+            ]
+            for k in stale:
+                logger.warning("Evicting stale split tracker id=%d (%.1fs old)", k, now - self._split_trackers[k].created_at)
+                del self._split_trackers[k]
+
             tracker = _SplitTracker(
                 total=frame.split_packet_count,
                 reliability=frame.reliability,
                 ordering_index=frame.ordering_index,
                 ordering_channel=frame.ordering_channel,
+                created_at=now,
             )
             self._split_trackers[sid] = tracker
 
@@ -463,6 +547,7 @@ class ReliabilityLayer:
             return None
 
         # All fragments received — reassemble in order
+        logger.debug("Split reassembly complete: id=%d, %d fragments", sid, tracker.total)
         parts = [tracker.received[i] for i in range(tracker.total)]
         del self._split_trackers[sid]
         return b"".join(parts)

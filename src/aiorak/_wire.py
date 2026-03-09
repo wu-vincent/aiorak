@@ -21,10 +21,14 @@ resulting categories applies:
   number followed by one or more message frames.
 """
 
+import logging
 import struct
 from dataclasses import dataclass
 
+logger = logging.getLogger(__name__)
+
 from ._bitstream import BitStream
+from ._constants import DATAGRAM_MESSAGE_ID_ARRAY_LENGTH
 from ._types import Reliability
 
 # ---------------------------------------------------------------------------
@@ -73,6 +77,10 @@ def decode_range_list(bs: BitStream) -> list[tuple[int, int]]:
     """
     bs.align_read_to_byte()
     count = bs.read_uint16()
+    if count > DATAGRAM_MESSAGE_ID_ARRAY_LENGTH:
+        raise ValueError(
+            f"Range list count {count} exceeds maximum {DATAGRAM_MESSAGE_ID_ARRAY_LENGTH}"
+        )
     ranges: list[tuple[int, int]] = []
     for _ in range(count):
         min_eq_max = bs.read_uint8()
@@ -401,6 +409,7 @@ def decode_datagram(data: bytes) -> tuple[DatagramHeader, list[MessageFrame] | l
 
     is_valid = bs.read_bit()
     if not is_valid:
+        logger.debug("Datagram with isValid=0 (likely offline data), %d bytes", len(data))
         raise ValueError("Datagram isValid bit is 0 — likely offline data")
 
     is_ack = bs.read_bit()

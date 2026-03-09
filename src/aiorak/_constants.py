@@ -63,6 +63,14 @@ NUMBER_OF_ORDERED_STREAMS: int = 32
 RESEND_BUFFER_SIZE: int = 512
 """Default size of the datagram resend buffer (ring buffer slots)."""
 
+DEFAULT_RECEIVED_PACKET_QUEUE_SIZE: int = 512
+"""Default sliding window size for received datagram tracking.
+Matches C++ DEFAULT_HAS_RECEIVED_PACKET_QUEUE_SIZE."""
+
+DATAGRAM_MESSAGE_ID_ARRAY_LENGTH: int = 512
+"""Maximum datagrams tracked for ACK/NAK. Used as range list count cap.
+Matches C++ DATAGRAM_MESSAGE_ID_ARRAY_LENGTH."""
+
 # ---------------------------------------------------------------------------
 # Sequence number space — 24-bit unsigned integers
 # ---------------------------------------------------------------------------

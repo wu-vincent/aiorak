@@ -12,7 +12,10 @@ Classes:
 """
 
 import asyncio
+import logging
 from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 
 class RakNetTransport(asyncio.DatagramProtocol):
@@ -63,7 +66,7 @@ class RakNetTransport(asyncio.DatagramProtocol):
             exc: The exception that occurred.
         """
         # Transient UDP errors are normal; do not close the transport.
-        pass
+        logger.warning("UDP error received: %s", exc)
 
     def connection_lost(self, exc: Exception | None) -> None:
         """Called when the transport is closed.
@@ -72,6 +75,7 @@ class RakNetTransport(asyncio.DatagramProtocol):
             exc: The exception that caused the loss, or ``None`` for a clean
                 shutdown.
         """
+        logger.debug("Transport connection lost: %s", exc)
         self._transport = None
 
 

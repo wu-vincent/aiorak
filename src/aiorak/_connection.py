@@ -15,8 +15,11 @@ reliable-UDP mechanics.
 
 import asyncio
 import enum
+import logging
 import time as _time
 from collections.abc import AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 from ._bitstream import BitStream
 from ._congestion import CongestionController
@@ -34,6 +37,7 @@ from ._constants import (
     ID_OPEN_CONNECTION_REQUEST_1,
     ID_OPEN_CONNECTION_REQUEST_2,
     MAXIMUM_MTU,
+    MINIMUM_MTU,
     MTU_DISCOVERY_SIZES,
     OFFLINE_MAGIC,
     RAKNET_PROTOCOL_VERSION,
@@ -99,7 +103,7 @@ class Connection:
         self.timeout = timeout
 
         self._cc = CongestionController(mtu)
-        self._reliability = ReliabilityLayer(mtu, self._cc)
+        self._reliability = ReliabilityLayer(mtu, self._cc, timeout=timeout)
 
         self._last_recv_time: float = 0.0
         self._last_ping_time: float = 0.0
@@ -280,6 +284,7 @@ class Connection:
         # Timeout check
         if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED, ConnectionState.DISCONNECTING):
             if self._last_recv_time > 0 and now - self._last_recv_time > self.timeout:
+                logger.warning("Connection to %s timed out after %.1fs", self.address, self.timeout)
                 self._events.append((_Signal.DISCONNECT, b""))
                 self.state = ConnectionState.DISCONNECTED
                 return outgoing
@@ -419,15 +424,18 @@ class Connection:
         bs.read_uint8()  # msg ID
         magic = bs.read_bytes(16)
         if magic != OFFLINE_MAGIC:
+            logger.warning("Open request 1 from %s: invalid magic", self.address)
             return None
         proto = bs.read_uint8()
         if proto != RAKNET_PROTOCOL_VERSION:
+            logger.warning("Open request 1 from %s: protocol %d != %d", self.address, proto, RAKNET_PROTOCOL_VERSION)
             return None
 
         # MTU = total datagram size + UDP header
         incoming_mtu = len(data) + UDP_HEADER_SIZE
 
         self.state = ConnectionState.CONNECTING
+        logger.debug("State -> CONNECTING for %s", self.address)
         self._last_recv_time = now
 
         # Build reply
@@ -456,12 +464,16 @@ class Connection:
         bs.read_uint8()  # msg ID
         magic = bs.read_bytes(16)
         if magic != OFFLINE_MAGIC:
+            logger.warning("Open reply 1 from %s: invalid magic", self.address)
             return None
         self.remote_guid = bs.read_uint64()
         has_security = bs.read_uint8()
         if has_security:
             return None  # Security not supported
         mtu = bs.read_uint16()
+        if not (MINIMUM_MTU <= mtu <= MAXIMUM_MTU):
+            logger.warning("Open reply 1 from %s: MTU %d out of range [%d, %d]", self.address, mtu, MINIMUM_MTU, MAXIMUM_MTU)
+            return None
         self.mtu = mtu
 
         # Update reliability layer and CC with negotiated MTU
@@ -496,9 +508,13 @@ class Connection:
         bs.read_uint8()  # msg ID
         magic = bs.read_bytes(16)
         if magic != OFFLINE_MAGIC:
+            logger.warning("Open request 2 from %s: invalid magic", self.address)
             return None
         _server_addr = bs.read_address()
         mtu = bs.read_uint16()
+        if not (MINIMUM_MTU <= mtu <= MAXIMUM_MTU):
+            logger.warning("Open request 2 from %s: MTU %d out of range [%d, %d]", self.address, mtu, MINIMUM_MTU, MAXIMUM_MTU)
+            return None
         self.remote_guid = bs.read_uint64()
         self.mtu = mtu
 
@@ -583,6 +599,7 @@ class Connection:
             return self._handle_connection_accepted(data, now)
         elif msg_id == ID_NEW_INCOMING_CONNECTION and self.is_server and self.state == ConnectionState.CONNECTING:
             self.state = ConnectionState.CONNECTED
+            logger.debug("State -> CONNECTED for %s", self.address)
             self._events.append((_Signal.CONNECT, b""))
             return None
 
@@ -666,6 +683,7 @@ class Connection:
         _reply_time = bs.read_int64()
 
         self.state = ConnectionState.CONNECTED
+        logger.debug("State -> CONNECTED for %s", self.address)
         self._events.append((_Signal.CONNECT, b""))
 
         # Send ID_NEW_INCOMING_CONNECTION
