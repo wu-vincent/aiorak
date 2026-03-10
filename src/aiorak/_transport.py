@@ -33,8 +33,10 @@ class RakNetTransport(asyncio.DatagramProtocol):
     def __init__(
         self,
         on_datagram: Callable[[bytes, tuple[str, int]], None],
+        on_error: Callable[[Exception], None] | None = None,
     ) -> None:
         self._on_datagram = on_datagram
+        self._on_error = on_error
         self._transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -67,6 +69,8 @@ class RakNetTransport(asyncio.DatagramProtocol):
         """
         # Transient UDP errors are normal; do not close the transport.
         logger.warning("UDP error received: %s", exc)
+        if self._on_error is not None:
+            self._on_error(exc)
 
     def connection_lost(self, exc: Exception | None) -> None:
         """Called when the transport is closed.

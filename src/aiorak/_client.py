@@ -62,6 +62,7 @@ class Client:
         self._socket: UDPSocket | None = None
         self._update_task: asyncio.Task[None] | None = None
         self._connected_event: asyncio.Event = asyncio.Event()
+        self._connect_error: OSError | None = None
         self._closed = False
 
     # ------------------------------------------------------------------
@@ -80,7 +81,7 @@ class Client:
         """
         loop = asyncio.get_running_loop()
         transport, _protocol = await loop.create_datagram_endpoint(
-            lambda: RakNetTransport(self._on_datagram),
+            lambda: RakNetTransport(self._on_datagram, self._on_transport_error),
             remote_addr=self._server_address,
         )
         self._socket = UDPSocket(transport)
@@ -104,6 +105,8 @@ class Client:
 
         # Wait for connection to be established
         await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
+        if self._connect_error is not None:
+            raise self._connect_error
         logger.debug("Connected to %s", self._server_address)
 
     async def close(self) -> None:
@@ -217,6 +220,16 @@ class Client:
     # ------------------------------------------------------------------
     # Internal: datagram dispatch
     # ------------------------------------------------------------------
+
+    def _on_transport_error(self, exc: Exception) -> None:
+        """Callback for UDP transport errors (e.g. ICMP unreachable).
+
+        During handshake, this fails the connect fast instead of waiting
+        for the full timeout.
+        """
+        if not self._connected_event.is_set():
+            self._connect_error = OSError(str(exc))
+            self._connected_event.set()  # unblock connect()
 
     def _on_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         """Callback for incoming UDP datagrams."""
