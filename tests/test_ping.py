@@ -1,6 +1,5 @@
 """Port of PingTest.cpp — verify ping latency measurement and timeout behaviour."""
 
-
 import pytest
 
 import aiorak
