@@ -48,8 +48,8 @@ async def test_reject_beyond_max(server_factory, client_factory):
     await wait_for_peers(server, max_conn)
     assert len(server._peers) == max_conn
 
-    # The 5th connection should fail with a short timeout
-    with pytest.raises(TimeoutError):
+    # The 5th connection should fail — server sends rejection
+    with pytest.raises(ConnectionRefusedError):
         await aiorak.connect(addr, timeout=2.0)
 
     # Server should still have exactly max_conn peers

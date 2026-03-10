@@ -16,6 +16,7 @@ reliable-UDP mechanics.
 import asyncio
 import enum
 import logging
+import socket as _socket
 import time as _time
 from collections.abc import AsyncIterator
 
@@ -23,20 +24,25 @@ from ._bitstream import BitStream
 from ._congestion import CongestionController
 from ._constants import (
     DEFAULT_TIMEOUT,
+    ID_ALREADY_CONNECTED,
     ID_CONNECTED_PING,
     ID_CONNECTED_PONG,
+    ID_CONNECTION_BANNED,
     ID_CONNECTION_REQUEST,
     ID_CONNECTION_REQUEST_ACCEPTED,
     ID_DETECT_LOST_CONNECTIONS,
     ID_DISCONNECTION_NOTIFICATION,
     ID_INCOMPATIBLE_PROTOCOL_VERSION,
+    ID_IP_RECENTLY_CONNECTED,
     ID_NEW_INCOMING_CONNECTION,
+    ID_NO_FREE_INCOMING_CONNECTIONS,
     ID_OPEN_CONNECTION_REPLY_1,
     ID_OPEN_CONNECTION_REPLY_2,
     ID_OPEN_CONNECTION_REQUEST_1,
     ID_OPEN_CONNECTION_REQUEST_2,
     MAXIMUM_MTU,
     MINIMUM_MTU,
+    NUMBER_OF_INTERNAL_IDS,
     OFFLINE_MAGIC,
     RAKNET_PROTOCOL_VERSION,
     UDP_HEADER_SIZE,
@@ -45,6 +51,29 @@ from ._reliability import ReliabilityLayer
 from ._types import Reliability
 
 logger = logging.getLogger(__name__)
+
+
+def _get_local_addresses() -> list[str]:
+    """Discover local IPv4 and IPv6 addresses from the system's network interfaces.
+
+    Mirrors C++ ``GetMyIP_Windows_Linux_IPV4And6``: calls ``getaddrinfo``
+    with ``AF_UNSPEC`` to enumerate all local addresses, then sorts them.
+    """
+    try:
+        infos = _socket.getaddrinfo(
+            _socket.gethostname(), None, _socket.AF_UNSPEC, _socket.SOCK_DGRAM
+        )
+        seen: set[str] = set()
+        addrs: list[str] = []
+        for info in infos:
+            ip = info[4][0]
+            if ip not in seen:
+                seen.add(ip)
+                addrs.append(ip)
+        addrs.sort()
+        return addrs
+    except OSError:
+        return ["127.0.0.1"]
 
 
 class _Signal(enum.IntEnum):
@@ -88,6 +117,8 @@ class Connection:
         min_mtu: Smallest MTU accepted during handshake.
         mtu_discovery_sizes: MTU sizes attempted in order during client
             connection handshake.  Defaults to ``(max_mtu, 1200, 576)``.
+        num_internal_ids: Number of internal addresses exchanged during the
+            reliable handshake.  Default 10 (C++ default), some forks use 20.
     """
 
     def __init__(
@@ -102,6 +133,7 @@ class Connection:
         max_mtu: int = MAXIMUM_MTU,
         min_mtu: int = MINIMUM_MTU,
         mtu_discovery_sizes: tuple[int, ...] | None = None,
+        num_internal_ids: int = NUMBER_OF_INTERNAL_IDS,
     ) -> None:
         self.address = address
         self.guid = guid
@@ -114,6 +146,8 @@ class Connection:
         self._max_mtu = max_mtu
         self._min_mtu = min_mtu
         self._mtu_discovery_sizes = mtu_discovery_sizes if mtu_discovery_sizes is not None else (max_mtu, 1200, 576)
+        self._num_internal_ids = num_internal_ids
+        self._local_port: int = 0
 
         self._cc = CongestionController(mtu)
         self._reliability = ReliabilityLayer(mtu, self._cc, timeout=timeout)
@@ -265,6 +299,13 @@ class Connection:
                     outgoing.append(resp)
                 return outgoing
 
+            # Offline rejection packets (e.g. incompatible protocol version)
+            if not self.is_server and len(data) >= 1 and data[0] in self._OFFLINE_REJECTION_IDS:
+                logger.warning("Connection to %s rejected: message ID %d", self.address, data[0])
+                self._events.append((_Signal.DISCONNECT, data))
+                self.state = ConnectionState.DISCONNECTED
+                return outgoing
+
         if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED, ConnectionState.DISCONNECTING):
             self._reliability.on_datagram_received(data, now)
             # Process any completed messages
@@ -393,6 +434,16 @@ class Connection:
             ID_OPEN_CONNECTION_REPLY_1,
             ID_OPEN_CONNECTION_REQUEST_2,
             ID_OPEN_CONNECTION_REPLY_2,
+        }
+    )
+
+    _OFFLINE_REJECTION_IDS = frozenset(
+        {
+            ID_INCOMPATIBLE_PROTOCOL_VERSION,
+            ID_NO_FREE_INCOMING_CONNECTIONS,
+            ID_ALREADY_CONNECTED,
+            ID_CONNECTION_BANNED,
+            ID_IP_RECENTLY_CONNECTED,
         }
     )
 
@@ -680,9 +731,12 @@ class Connection:
         reply.write_address(self.address[0], self.address[1])
         # System index
         reply.write_uint16(self._system_index)
-        # 10 internal addresses (6 bytes each = 7 bytes with address family)
-        for _ in range(10):
-            reply.write_address("127.0.0.1", 0)
+        local_ips = _get_local_addresses()
+        for i in range(self._num_internal_ids):
+            if i < len(local_ips):
+                reply.write_address(local_ips[i], self._local_port)
+            else:
+                reply.write_address("0.0.0.0", 0)
         # Timestamps: client's sent time + server time
         reply.write_int64(client_time)
         reply.write_int64(int(_time.time() * 1000))
@@ -707,8 +761,7 @@ class Connection:
         bs.read_uint8()  # msg ID
         _our_addr = bs.read_address()
         _sys_idx = bs.read_uint16()
-        # Skip 10 internal addresses
-        for _ in range(10):
+        for _ in range(self._num_internal_ids):
             bs.read_address()
         _sent_time = bs.read_int64()
         _reply_time = bs.read_int64()
@@ -721,9 +774,12 @@ class Connection:
         reply = BitStream()
         reply.write_uint8(ID_NEW_INCOMING_CONNECTION)
         reply.write_address(self.address[0], self.address[1])
-        # 10 internal addresses
-        for _ in range(10):
-            reply.write_address("127.0.0.1", 0)
+        local_ips = _get_local_addresses()
+        for i in range(self._num_internal_ids):
+            if i < len(local_ips):
+                reply.write_address(local_ips[i], self._local_port)
+            else:
+                reply.write_address("0.0.0.0", 0)
         reply.write_int64(_reply_time)
         reply.write_int64(int(_time.time() * 1000))
 

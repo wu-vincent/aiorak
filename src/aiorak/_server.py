@@ -30,6 +30,7 @@ from ._constants import (
     ID_UNCONNECTED_PONG,
     MAXIMUM_MTU,
     MINIMUM_MTU,
+    NUMBER_OF_INTERNAL_IDS,
     OFFLINE_MAGIC,
     RAKNET_PROTOCOL_VERSION,
 )
@@ -60,6 +61,7 @@ class Server:
         protocol_version: int = RAKNET_PROTOCOL_VERSION,
         max_mtu: int = MAXIMUM_MTU,
         min_mtu: int = MINIMUM_MTU,
+        num_internal_ids: int = NUMBER_OF_INTERNAL_IDS,
     ) -> None:
         self._local_address = local_address
         self._handler = handler
@@ -68,6 +70,7 @@ class Server:
         self._protocol_version = protocol_version
         self._max_mtu = max_mtu
         self._min_mtu = min_mtu
+        self._num_internal_ids = num_internal_ids
 
         self._connections: dict[tuple[str, int], Connection] = {}
         self._peers: dict[tuple[str, int], Connection] = {}
@@ -90,6 +93,7 @@ class Server:
             local_addr=self._local_address,
         )
         self._socket = UDPSocket(transport)
+        self._bound_port = self._socket.local_address[1]
         self._update_task = asyncio.create_task(self._update_loop())
 
     async def serve_forever(self) -> None:
@@ -198,8 +202,10 @@ class Server:
                     protocol_version=self._protocol_version,
                     max_mtu=self._max_mtu,
                     min_mtu=self._min_mtu,
+                    num_internal_ids=self._num_internal_ids,
                 )
                 conn._system_index = len(self._connections)
+                conn._local_port = self._bound_port
                 self._connections[addr] = conn
 
         conn = self._connections.get(addr)

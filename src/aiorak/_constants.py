@@ -54,6 +54,10 @@ UDP_HEADER_SIZE: int = 28
 # ---------------------------------------------------------------------------
 # Reliability layer limits
 # ---------------------------------------------------------------------------
+NUMBER_OF_INTERNAL_IDS: int = 10
+"""Number of internal addresses exchanged during the reliable handshake.
+Matches C++ ``MAXIMUM_NUMBER_OF_INTERNAL_IDS`` (default 10, some forks use 20)."""
+
 NUMBER_OF_ORDERED_STREAMS: int = 32
 """Maximum number of independent ordering channels."""
 

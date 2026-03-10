@@ -19,7 +19,7 @@ import time as _time
 from collections.abc import AsyncIterator
 
 from ._connection import Connection, ConnectionState, _Signal
-from ._constants import MAXIMUM_MTU, MINIMUM_MTU, RAKNET_PROTOCOL_VERSION
+from ._constants import MAXIMUM_MTU, MINIMUM_MTU, NUMBER_OF_INTERNAL_IDS, RAKNET_PROTOCOL_VERSION
 from ._transport import RakNetTransport, UDPSocket
 from ._types import Reliability
 
@@ -50,6 +50,7 @@ class Client:
         max_mtu: int = MAXIMUM_MTU,
         min_mtu: int = MINIMUM_MTU,
         mtu_discovery_sizes: tuple[int, ...] | None = None,
+        num_internal_ids: int = NUMBER_OF_INTERNAL_IDS,
     ) -> None:
         self._server_address = server_address
         self._guid = guid if guid is not None else random.getrandbits(64)
@@ -57,6 +58,7 @@ class Client:
         self._max_mtu = max_mtu
         self._min_mtu = min_mtu
         self._mtu_discovery_sizes = mtu_discovery_sizes if mtu_discovery_sizes is not None else (max_mtu, 1200, 576)
+        self._num_internal_ids = num_internal_ids
 
         self._connection: Connection | None = None
         self._socket: UDPSocket | None = None
@@ -86,8 +88,13 @@ class Client:
         )
         self._socket = UDPSocket(transport)
 
+        # Use the resolved peer address (IP, port) from the transport so that
+        # write_address() in handshake packets gets a dotted-quad IP, not a hostname.
+        peer_addr = transport.get_extra_info("peername")
+        resolved_address = (peer_addr[0], peer_addr[1]) if peer_addr else self._server_address
+
         self._connection = Connection(
-            address=self._server_address,
+            address=resolved_address,
             guid=self._guid,
             is_server=False,
             mtu=self._max_mtu,
@@ -95,7 +102,9 @@ class Client:
             max_mtu=self._max_mtu,
             min_mtu=self._min_mtu,
             mtu_discovery_sizes=self._mtu_discovery_sizes,
+            num_internal_ids=self._num_internal_ids,
         )
+        self._connection._local_port = self._socket.local_address[1]
 
         now = _time.monotonic()
         initial_pkt = self._connection.start_connect(now)
@@ -246,6 +255,11 @@ class Client:
             if signal == _Signal.CONNECT:
                 self._connected_event.set()
             elif signal == _Signal.DISCONNECT:
+                if not self._connected_event.is_set():
+                    self._connect_error = ConnectionRefusedError(
+                        f"Connection rejected by server (ID {sig_data[0] if sig_data else '?'})"
+                    )
+                    self._connected_event.set()
                 self._connection._feed_disconnect()
                 self._closed = True
             elif signal == _Signal.RECEIVE:

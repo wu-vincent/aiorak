@@ -239,7 +239,11 @@ class ReliabilityLayer:
             raw: Raw datagram bytes (the full UDP payload).
             now: Current monotonic time in seconds.
         """
-        header, body = decode_datagram(raw)
+        try:
+            header, body = decode_datagram(raw)
+        except ValueError:
+            logger.debug("Dropping malformed datagram (%d bytes)", len(raw))
+            return
 
         if header.is_ack:
             self._handle_ack(body, now)  # type: ignore[arg-type]

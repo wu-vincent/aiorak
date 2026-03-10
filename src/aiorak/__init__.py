@@ -60,6 +60,7 @@ async def create_server(
     protocol_version: int | None = None,
     max_mtu: int | None = None,
     min_mtu: int | None = None,
+    num_internal_ids: int | None = None,
 ) -> Server:
     """Create and start a RakNet server bound to *address*.
 
@@ -71,6 +72,8 @@ async def create_server(
         protocol_version: RakNet protocol version for handshake validation.
         max_mtu: Largest MTU accepted during handshake.
         min_mtu: Smallest MTU accepted during handshake.
+        num_internal_ids: Number of internal addresses in the reliable
+            handshake (default 10, some forks use 20).
 
     Returns:
         A started :class:`Server` instance.
@@ -90,6 +93,8 @@ async def create_server(
         kwargs["max_mtu"] = max_mtu
     if min_mtu is not None:
         kwargs["min_mtu"] = min_mtu
+    if num_internal_ids is not None:
+        kwargs["num_internal_ids"] = num_internal_ids
     server = Server(address, handler, **kwargs)
     await server.start()
     return server
@@ -104,6 +109,7 @@ async def connect(
     max_mtu: int | None = None,
     min_mtu: int | None = None,
     mtu_discovery_sizes: tuple[int, ...] | None = None,
+    num_internal_ids: int | None = None,
 ) -> Client:
     """Connect to a RakNet server at *address*.
 
@@ -119,6 +125,8 @@ async def connect(
         min_mtu: Smallest MTU accepted during handshake.
         mtu_discovery_sizes: MTU sizes attempted in order during handshake.
             Defaults to ``(max_mtu, 1200, 576)``.
+        num_internal_ids: Number of internal addresses in the reliable
+            handshake (default 10, some forks use 20).
 
     Returns:
         A connected :class:`Client` instance.
@@ -141,6 +149,8 @@ async def connect(
         kwargs["min_mtu"] = min_mtu
     if mtu_discovery_sizes is not None:
         kwargs["mtu_discovery_sizes"] = mtu_discovery_sizes
+    if num_internal_ids is not None:
+        kwargs["num_internal_ids"] = num_internal_ids
     client = Client(address, **kwargs)
     await client.connect(timeout=timeout)
     return client

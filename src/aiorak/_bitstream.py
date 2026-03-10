@@ -471,49 +471,81 @@ class BitStream:
     # ------------------------------------------------------------------
 
     def write_address(self, host: str, port: int) -> None:
-        """Write an IPv4 address in RakNet ``SystemAddress`` wire format.
+        """Write an address in RakNet ``SystemAddress`` wire format.
 
-        Format: ``address_family(1) + inverted_ip(4) + port_be(2)`` = 7 bytes.
-        RakNet uses AF_INET = 4 and inverts each IP octet with bitwise NOT.
+        IPv4 format: ``af(1) + inverted_ip(4) + port_be(2)`` = 7 bytes.
+        IPv6 format: ``af(1) + port_be(2) + flowinfo(4) + addr(16) + scope_id(4)`` = 27 bytes.
+
+        RakNet uses AF_INET = 4, AF_INET6 = 6, and inverts each IPv4 octet.
 
         Args:
-            host: Dotted-quad IPv4 address string (e.g. ``"127.0.0.1"``).
+            host: IPv4 dotted-quad or IPv6 colon-hex address string.
             port: UDP port number (0–65535).
         """
         self.align_write_to_byte()
-        octets = [int(o) for o in host.split(".")]
-        self._ensure_capacity(7 * 8)
-        idx = self._write_bit_pos >> 3
-        # Address family (IPv4 = 4)
-        self._buf[idx] = 4
-        # Inverted IP octets
-        for i, octet in enumerate(octets):
-            self._buf[idx + 1 + i] = (~octet) & 0xFF
-        # Port in big-endian
-        self._buf[idx + 5 : idx + 7] = struct.pack(">H", port & 0xFFFF)
-        self._write_bit_pos += 7 * 8
+        if ":" in host:
+            # IPv6: AF(1) + sin6_family(2) + port_BE(2) + flowinfo(4) + addr(16) + scope_id(4) = 29 bytes
+            import socket as _socket
+
+            addr_bytes = _socket.inet_pton(_socket.AF_INET6, host)
+            self._ensure_capacity(29 * 8)
+            idx = self._write_bit_pos >> 3
+            self._buf[idx] = 6
+            struct.pack_into("<H", self._buf, idx + 1, _socket.AF_INET6)
+            struct.pack_into(">H", self._buf, idx + 3, port & 0xFFFF)
+            self._buf[idx + 5 : idx + 9] = b"\x00\x00\x00\x00"  # flowinfo
+            self._buf[idx + 9 : idx + 25] = addr_bytes
+            self._buf[idx + 25 : idx + 29] = b"\x00\x00\x00\x00"  # scope_id
+            self._write_bit_pos += 29 * 8
+        else:
+            # IPv4
+            octets = [int(o) for o in host.split(".")]
+            self._ensure_capacity(7 * 8)
+            idx = self._write_bit_pos >> 3
+            self._buf[idx] = 4
+            for i, octet in enumerate(octets):
+                self._buf[idx + 1 + i] = (~octet) & 0xFF
+            self._buf[idx + 5 : idx + 7] = struct.pack(">H", port & 0xFFFF)
+            self._write_bit_pos += 7 * 8
 
     def read_address(self) -> tuple[str, int]:
-        """Read an IPv4 address from RakNet ``SystemAddress`` wire format.
+        """Read an address from RakNet ``SystemAddress`` wire format.
 
         Returns:
-            ``(host, port)`` tuple where *host* is a dotted-quad string.
+            ``(host, port)`` tuple.
 
         Raises:
-            ValueError: If the address family is not IPv4 or data is missing.
+            ValueError: If the address family is unsupported or data is missing.
         """
         self.align_read_to_byte()
-        if self._read_bit_pos + 7 * 8 > self._write_bit_pos:
-            raise ValueError("Not enough data to read address")
+        if self._read_bit_pos + 1 * 8 > self._write_bit_pos:
+            raise ValueError("Not enough data to read address family")
         idx = self._read_bit_pos >> 3
         af = self._buf[idx]
-        if af != 4:
-            raise ValueError(f"Unsupported address family: {af} (expected 4/IPv4)")
-        octets = [str((~self._buf[idx + 1 + i]) & 0xFF) for i in range(4)]
-        host = ".".join(octets)
-        (port,) = struct.unpack_from(">H", self._buf, idx + 5)
-        self._read_bit_pos += 7 * 8
-        return host, port
+        if af in (0, 4):  # 0 = unassigned (same wire layout as IPv4)
+            if self._read_bit_pos + 7 * 8 > self._write_bit_pos:
+                raise ValueError("Not enough data to read IPv4 address")
+            octets = [str((~self._buf[idx + 1 + i]) & 0xFF) for i in range(4)]
+            host = ".".join(octets)
+            (port,) = struct.unpack_from(">H", self._buf, idx + 5)
+            self._read_bit_pos += 7 * 8
+            return host, port
+        elif af == 6:
+            # IPv6: AF(1) + sin6_family(2) + port_BE(2) + flowinfo(4) + addr(16) + scope_id(4) = 29 bytes
+            if self._read_bit_pos + 29 * 8 > self._write_bit_pos:
+                raise ValueError("Not enough data to read IPv6 address")
+            import socket as _socket
+
+            # sin6_family at idx+1..idx+3 (skip, redundant with AF)
+            (port,) = struct.unpack_from(">H", self._buf, idx + 3)
+            # flowinfo at idx+5..idx+9 (skip)
+            addr_bytes = bytes(self._buf[idx + 9 : idx + 25])
+            # scope_id at idx+25..idx+29 (skip)
+            host = _socket.inet_ntop(_socket.AF_INET6, addr_bytes)
+            self._read_bit_pos += 29 * 8
+            return host, port
+        else:
+            raise ValueError(f"Unsupported address family: {af} (expected 4/IPv4 or 6/IPv6)")
 
     # ------------------------------------------------------------------
     # Padding
