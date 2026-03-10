@@ -19,8 +19,6 @@ import logging
 import time as _time
 from collections.abc import AsyncIterator
 
-logger = logging.getLogger(__name__)
-
 from ._bitstream import BitStream
 from ._congestion import CongestionController
 from ._constants import (
@@ -44,6 +42,8 @@ from ._constants import (
 )
 from ._reliability import ReliabilityLayer
 from ._types import Reliability
+
+logger = logging.getLogger(__name__)
 
 
 class _Signal(enum.IntEnum):
@@ -484,7 +484,9 @@ class Connection:
             return None  # Security not supported
         mtu = bs.read_uint16()
         if not (self._min_mtu <= mtu <= self._max_mtu):
-            logger.warning("Open reply 1 from %s: MTU %d out of range [%d, %d]", self.address, mtu, self._min_mtu, self._max_mtu)
+            logger.warning(
+                "Open reply 1 from %s: MTU %d out of range [%d, %d]", self.address, mtu, self._min_mtu, self._max_mtu
+            )
             return None
         self.mtu = mtu
 
@@ -525,7 +527,9 @@ class Connection:
         _server_addr = bs.read_address()
         mtu = bs.read_uint16()
         if not (self._min_mtu <= mtu <= self._max_mtu):
-            logger.warning("Open request 2 from %s: MTU %d out of range [%d, %d]", self.address, mtu, self._min_mtu, self._max_mtu)
+            logger.warning(
+                "Open request 2 from %s: MTU %d out of range [%d, %d]", self.address, mtu, self._min_mtu, self._max_mtu
+            )
             return None
         self.remote_guid = bs.read_uint64()
         self.mtu = mtu

@@ -1,11 +1,11 @@
 """Tests for production hardening: sliding window, split tracker eviction,
 channel validation, MTU validation, range list cap, and client context manager."""
 
-import asyncio
 import time
 
 import pytest
 
+from aiorak._bitstream import BitStream
 from aiorak._client import Client
 from aiorak._congestion import CongestionController
 from aiorak._connection import Connection
@@ -17,11 +17,9 @@ from aiorak._constants import (
     NUMBER_OF_ORDERED_STREAMS,
     SEQ_NUM_MAX,
 )
-from aiorak._reliability import ReliabilityLayer, _ReceivedWindow, _SplitTracker
+from aiorak._reliability import ReliabilityLayer, _ReceivedWindow
 from aiorak._types import Reliability
 from aiorak._wire import MessageFrame, decode_range_list, encode_datagram
-from aiorak._bitstream import BitStream
-
 
 # -----------------------------------------------------------------------
 # _ReceivedWindow tests
@@ -266,6 +264,7 @@ class TestMTUValidation:
         conn.state = conn.state  # DISCONNECTED
         # Simulate being in CONNECTING state
         from aiorak._connection import ConnectionState
+
         conn.state = ConnectionState.CONNECTING
         data = self._build_open_reply_1(1200)
         result = conn._handle_open_reply_1(data, time.monotonic())
@@ -275,6 +274,7 @@ class TestMTUValidation:
     def test_reply1_mtu_too_low(self):
         conn = self._make_connection(is_server=False)
         from aiorak._connection import ConnectionState
+
         conn.state = ConnectionState.CONNECTING
         data = self._build_open_reply_1(MINIMUM_MTU - 1)
         result = conn._handle_open_reply_1(data, time.monotonic())
@@ -283,6 +283,7 @@ class TestMTUValidation:
     def test_reply1_mtu_too_high(self):
         conn = self._make_connection(is_server=False)
         from aiorak._connection import ConnectionState
+
         conn.state = ConnectionState.CONNECTING
         data = self._build_open_reply_1(MAXIMUM_MTU + 1)
         result = conn._handle_open_reply_1(data, time.monotonic())
@@ -292,6 +293,7 @@ class TestMTUValidation:
         for mtu in (MINIMUM_MTU, MAXIMUM_MTU):
             conn = self._make_connection(is_server=False)
             from aiorak._connection import ConnectionState
+
             conn.state = ConnectionState.CONNECTING
             data = self._build_open_reply_1(mtu)
             result = conn._handle_open_reply_1(data, time.monotonic())
@@ -300,6 +302,7 @@ class TestMTUValidation:
     def test_request2_valid_mtu(self):
         conn = self._make_connection(is_server=True)
         from aiorak._connection import ConnectionState
+
         conn.state = ConnectionState.CONNECTING
         data = self._build_open_request_2(1200)
         result = conn._handle_open_request_2(data, time.monotonic())
@@ -309,6 +312,7 @@ class TestMTUValidation:
     def test_request2_mtu_too_low(self):
         conn = self._make_connection(is_server=True)
         from aiorak._connection import ConnectionState
+
         conn.state = ConnectionState.CONNECTING
         data = self._build_open_request_2(MINIMUM_MTU - 1)
         result = conn._handle_open_request_2(data, time.monotonic())
@@ -317,6 +321,7 @@ class TestMTUValidation:
     def test_request2_mtu_too_high(self):
         conn = self._make_connection(is_server=True)
         from aiorak._connection import ConnectionState
+
         conn.state = ConnectionState.CONNECTING
         data = self._build_open_request_2(MAXIMUM_MTU + 1)
         result = conn._handle_open_request_2(data, time.monotonic())
@@ -378,7 +383,6 @@ class TestClientContextManager:
         """Client supports async with and calls close() on exit."""
         client = Client(("127.0.0.1", 19132))
         closed = False
-        original_close = client.close
 
         async def mock_close():
             nonlocal closed

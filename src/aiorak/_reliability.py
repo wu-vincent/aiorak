@@ -20,8 +20,6 @@ import heapq
 import logging
 from dataclasses import dataclass, field
 
-logger = logging.getLogger(__name__)
-
 from ._congestion import CongestionController
 from ._constants import (
     DEFAULT_RECEIVED_PACKET_QUEUE_SIZE,
@@ -39,6 +37,8 @@ from ._wire import (
     encode_datagram,
     encode_nak,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Internal packet tracking
@@ -213,9 +213,7 @@ class ReliabilityLayer:
             ValueError: If *ordering_channel* is not in ``[0, NUMBER_OF_ORDERED_STREAMS)``.
         """
         if not (0 <= ordering_channel < NUMBER_OF_ORDERED_STREAMS):
-            raise ValueError(
-                f"ordering_channel must be in [0, {NUMBER_OF_ORDERED_STREAMS}), got {ordering_channel}"
-            )
+            raise ValueError(f"ordering_channel must be in [0, {NUMBER_OF_ORDERED_STREAMS}), got {ordering_channel}")
         max_payload = self._max_payload_per_frame(reliability)
 
         if len(data) <= max_payload:
@@ -524,12 +522,11 @@ class ReliabilityLayer:
         tracker = self._split_trackers.get(sid)
         if tracker is None:
             # Evict stale trackers before creating a new one
-            stale = [
-                k for k, t in self._split_trackers.items()
-                if now - t.created_at > self._timeout
-            ]
+            stale = [k for k, t in self._split_trackers.items() if now - t.created_at > self._timeout]
             for k in stale:
-                logger.warning("Evicting stale split tracker id=%d (%.1fs old)", k, now - self._split_trackers[k].created_at)
+                logger.warning(
+                    "Evicting stale split tracker id=%d (%.1fs old)", k, now - self._split_trackers[k].created_at
+                )
                 del self._split_trackers[k]
 
             tracker = _SplitTracker(

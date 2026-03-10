@@ -18,12 +18,12 @@ import random
 import time as _time
 from collections.abc import AsyncIterator
 
-logger = logging.getLogger(__name__)
-
 from ._connection import Connection, ConnectionState, _Signal
 from ._constants import MAXIMUM_MTU, MINIMUM_MTU, RAKNET_PROTOCOL_VERSION
 from ._transport import RakNetTransport, UDPSocket
 from ._types import Reliability
+
+logger = logging.getLogger(__name__)
 
 
 class Client:

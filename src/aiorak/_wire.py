@@ -25,11 +25,11 @@ import logging
 import struct
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
-
 from ._bitstream import BitStream
 from ._constants import DATAGRAM_MESSAGE_ID_ARRAY_LENGTH
 from ._types import Reliability
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Range list helpers
@@ -78,9 +78,7 @@ def decode_range_list(bs: BitStream) -> list[tuple[int, int]]:
     bs.align_read_to_byte()
     count = bs.read_uint16()
     if count > DATAGRAM_MESSAGE_ID_ARRAY_LENGTH:
-        raise ValueError(
-            f"Range list count {count} exceeds maximum {DATAGRAM_MESSAGE_ID_ARRAY_LENGTH}"
-        )
+        raise ValueError(f"Range list count {count} exceeds maximum {DATAGRAM_MESSAGE_ID_ARRAY_LENGTH}")
     ranges: list[tuple[int, int]] = []
     for _ in range(count):
         min_eq_max = bs.read_uint8()

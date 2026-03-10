@@ -20,8 +20,6 @@ import random
 import time as _time
 from collections.abc import Awaitable, Callable
 
-logger = logging.getLogger(__name__)
-
 from ._bitstream import BitStream
 from ._connection import Connection, ConnectionState, _Signal
 from ._constants import (
@@ -35,6 +33,8 @@ from ._constants import (
     RAKNET_PROTOCOL_VERSION,
 )
 from ._transport import RakNetTransport, UDPSocket
+
+logger = logging.getLogger(__name__)
 
 
 class Server:
