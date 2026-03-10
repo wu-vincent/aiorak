@@ -3,7 +3,7 @@
 import time
 
 from aiorak._congestion import CongestionController
-from aiorak._constants import MAXIMUM_MTU
+from aiorak._constants import MAX_SPLIT_PACKET_COUNT, MAXIMUM_MTU, SEQ_NUM_MAX
 from aiorak._reliability import ReliabilityLayer
 from aiorak._types import Reliability
 from aiorak._wire import (
@@ -244,3 +244,82 @@ class TestAckNak:
         # The expired frame should have been re-sent
         # Either it's in the resend queue or already produced in datagrams
         assert len(datagrams) >= 1 or len(layer._resend_queue) >= 1
+
+    def test_ack_range_wrapping_at_seq_max(self):
+        """ACK range spanning SEQ_NUM_MAX boundary is handled correctly."""
+        layer = _make_layer()
+        now = time.monotonic()
+
+        # Manually place two in-flight datagrams at the wrapping boundary
+        lo = SEQ_NUM_MAX - 1
+        hi = (SEQ_NUM_MAX + 1) & SEQ_NUM_MAX  # wraps to 0
+        for seq in [lo, SEQ_NUM_MAX, hi]:
+            frame = MessageFrame(
+                reliability=Reliability.RELIABLE,
+                data=b"\x86x",
+                reliable_message_number=seq,
+            )
+            from aiorak._reliability import _InFlightDatagram
+
+            layer._in_flight[seq] = _InFlightDatagram(seq=seq, send_time=now, frames=[frame], byte_size=10)
+            layer._unacked_bytes += 10
+
+        # ACK the wrapping range
+        ack = encode_ack([(lo, hi)])
+        layer.on_datagram_received(ack, now + 0.01)
+
+        # All three should be cleared
+        assert len(layer._in_flight) == 0
+
+
+class TestOrderingStale:
+    def test_stale_ordering_index_dropped(self):
+        """Ordering index behind expected should be silently dropped."""
+        layer = _make_layer()
+        now = time.monotonic()
+
+        # Deliver message 0 so expected becomes 1
+        frame0 = MessageFrame(
+            reliability=Reliability.RELIABLE_ORDERED,
+            data=b"msg0",
+            reliable_message_number=0,
+            ordering_index=0,
+            ordering_channel=0,
+        )
+        layer.on_datagram_received(encode_datagram(0, [frame0]), now)
+        assert layer.poll_receive() is not None
+
+        # Now send a stale message with ordering_index=0 (already delivered)
+        stale = MessageFrame(
+            reliability=Reliability.RELIABLE_ORDERED,
+            data=b"stale",
+            reliable_message_number=1,
+            ordering_index=0,
+            ordering_channel=0,
+        )
+        layer.on_datagram_received(encode_datagram(1, [stale]), now)
+
+        # Should not be delivered and should not accumulate in heap
+        assert layer.poll_receive() is None
+        assert len(layer._ordering_heaps[0]) == 0
+
+
+class TestMaxSplitCount:
+    def test_split_count_exceeding_max_rejected(self):
+        """Split packets claiming more than MAX_SPLIT_PACKET_COUNT are rejected."""
+        layer = _make_layer()
+        now = time.monotonic()
+
+        frame = MessageFrame(
+            reliability=Reliability.RELIABLE,
+            data=b"frag",
+            reliable_message_number=0,
+            split_packet_count=MAX_SPLIT_PACKET_COUNT + 1,
+            split_packet_id=1,
+            split_packet_index=0,
+        )
+        layer.on_datagram_received(encode_datagram(0, [frame]), now)
+
+        # Should be rejected — no tracker created
+        assert layer.poll_receive() is None
+        assert len(layer._split_trackers) == 0

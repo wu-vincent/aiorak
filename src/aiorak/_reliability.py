@@ -20,10 +20,12 @@ import heapq
 import logging
 from dataclasses import dataclass, field
 
-from ._congestion import CongestionController
+from ._congestion import CongestionController, seq_greater_than
 from ._constants import (
+    DATAGRAM_MESSAGE_ID_ARRAY_LENGTH,
     DEFAULT_RECEIVED_PACKET_QUEUE_SIZE,
     DEFAULT_TIMEOUT,
+    MAX_SPLIT_PACKET_COUNT,
     NUMBER_OF_ORDERED_STREAMS,
     SEQ_NUM_MAX,
     UDP_HEADER_SIZE,
@@ -126,7 +128,7 @@ class _SplitTracker:
         reliability: Reliability mode of the original message.
         ordering_index: Ordering index (if ordered).
         ordering_channel: Ordering channel (if ordered).
-        created_at: Monotonic timestamp when this tracker was created.
+        last_update_time: Monotonic timestamp when this tracker was created.
     """
 
     total: int
@@ -134,7 +136,7 @@ class _SplitTracker:
     reliability: Reliability = Reliability.RELIABLE
     ordering_index: int = 0
     ordering_channel: int = 0
-    created_at: float = 0.0
+    last_update_time: float = 0.0
 
 
 class ReliabilityLayer:
@@ -304,7 +306,12 @@ class ReliabilityLayer:
             # Re-queue frames for retransmission
             self._resend_queue.extend(inflight.frames)
 
-        # 4. Build data datagrams from resend + send queues
+        # 4. Evict stale split trackers
+        stale = [k for k, t in self._split_trackers.items() if now - t.last_update_time > self._timeout]
+        for k in stale:
+            del self._split_trackers[k]
+
+        # 5. Build data datagrams from resend + send queues
         combined = self._resend_queue + self._send_queue
         self._resend_queue.clear()
         self._send_queue.clear()
@@ -368,8 +375,10 @@ class ReliabilityLayer:
             now: Current monotonic time.
         """
         for lo, hi in ranges:
+            count = ((hi - lo) & SEQ_NUM_MAX) + 1
+            count = min(count, DATAGRAM_MESSAGE_ID_ARRAY_LENGTH)
             seq = lo
-            while seq <= hi:
+            for _ in range(count):
                 inflight = self._in_flight.pop(seq, None)
                 if inflight is not None:
                     rtt = now - inflight.send_time
@@ -384,8 +393,10 @@ class ReliabilityLayer:
             ranges: List of ``(min, max)`` missing sequence number ranges.
         """
         for lo, hi in ranges:
+            count = ((hi - lo) & SEQ_NUM_MAX) + 1
+            count = min(count, DATAGRAM_MESSAGE_ID_ARRAY_LENGTH)
             seq = lo
-            while seq <= hi:
+            for _ in range(count):
                 inflight = self._in_flight.pop(seq, None)
                 if inflight is not None:
                     self._unacked_bytes -= inflight.byte_size
@@ -480,11 +491,15 @@ class ReliabilityLayer:
                 self._highest_sequenced[ch] = -1  # Reset per C++ behavior
                 # Flush any buffered messages that are now in order
                 self._flush_ordering_heap(ch)
-            else:
+            elif seq_greater_than(
+                frame.ordering_index & SEQ_NUM_MAX,
+                self._expected_ordering_index[ch] & SEQ_NUM_MAX,
+            ):
                 heapq.heappush(
                     self._ordering_heaps[ch],
                     (frame.ordering_index, frame.data),
                 )
+            # else: stale ordering index, silently drop
 
     def _flush_ordering_heap(self, channel: int) -> None:
         """Deliver buffered ordered messages that are now sequential.
@@ -519,13 +534,15 @@ class ReliabilityLayer:
             fragments have arrived yet.
         """
         sid = frame.split_packet_id
+        if frame.split_packet_count > MAX_SPLIT_PACKET_COUNT:
+            return None
         tracker = self._split_trackers.get(sid)
         if tracker is None:
             # Evict stale trackers before creating a new one
-            stale = [k for k, t in self._split_trackers.items() if now - t.created_at > self._timeout]
+            stale = [k for k, t in self._split_trackers.items() if now - t.last_update_time > self._timeout]
             for k in stale:
                 logger.warning(
-                    "Evicting stale split tracker id=%d (%.1fs old)", k, now - self._split_trackers[k].created_at
+                    "Evicting stale split tracker id=%d (%.1fs old)", k, now - self._split_trackers[k].last_update_time
                 )
                 del self._split_trackers[k]
 
@@ -534,11 +551,12 @@ class ReliabilityLayer:
                 reliability=frame.reliability,
                 ordering_index=frame.ordering_index,
                 ordering_channel=frame.ordering_channel,
-                created_at=now,
+                last_update_time=now,
             )
             self._split_trackers[sid] = tracker
 
         tracker.received[frame.split_packet_index] = frame.data
+        tracker.last_update_time = now
 
         if len(tracker.received) < tracker.total:
             return None

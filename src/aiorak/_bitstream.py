@@ -148,6 +148,102 @@ class BitStream:
             self.write_bit(bool((value >> i) & 1))
 
     # ------------------------------------------------------------------
+    # Compressed integer write/read (matches C++ WriteCompressed)
+    # ------------------------------------------------------------------
+
+    def write_compressed_uint16(self, value: int) -> None:
+        """Write a 16-bit unsigned integer using RakNet compressed encoding.
+
+        Iterates bytes from MSB to the second byte. If a byte is zero, writes
+        a ``1`` bit (skip). The last byte (LSB) is always written.
+        """
+        b0 = value & 0xFF  # lo byte (LE byte 0)
+        b1 = (value >> 8) & 0xFF  # hi byte (LE byte 1)
+        if b1 == 0:
+            self.write_bit(True)  # hi byte is zero -> skip
+            self.write_bits(b0, 8)
+        else:
+            self.write_bit(False)  # hi byte present
+            self.write_bits(b0, 8)  # LE: lo first
+            self.write_bits(b1, 8)  # then hi
+
+    def read_compressed_uint16(self) -> int:
+        """Read a 16-bit unsigned integer using RakNet compressed encoding."""
+        if self.read_bit():  # hi byte was zero
+            return self.read_bits(8)
+        b0 = self.read_bits(8)
+        b1 = self.read_bits(8)
+        return b0 | (b1 << 8)
+
+    def write_compressed_uint32(self, value: int) -> None:
+        """Write a 32-bit unsigned integer using RakNet compressed encoding.
+
+        Iterates bytes from MSB (b3) down to b1. Each zero byte is skipped
+        with a ``1`` bit. A nonzero byte writes ``0`` then all remaining bytes
+        in LE order. The last byte (b0) is always written.
+        """
+        b = [(value >> (i * 8)) & 0xFF for i in range(4)]
+        for i in range(3, 0, -1):
+            if b[i] == 0:
+                self.write_bit(True)
+            else:
+                self.write_bit(False)
+                for j in range(i + 1):
+                    self.write_bits(b[j], 8)
+                return
+        self.write_bits(b[0], 8)
+
+    def read_compressed_uint32(self) -> int:
+        """Read a 32-bit unsigned integer using RakNet compressed encoding."""
+        for i in range(3, 0, -1):
+            if not self.read_bit():
+                result = 0
+                for j in range(i + 1):
+                    result |= self.read_bits(8) << (j * 8)
+                return result
+        return self.read_bits(8)
+
+    # ------------------------------------------------------------------
+    # Unaligned byte I/O
+    # ------------------------------------------------------------------
+
+    def write_bytes_unaligned(self, data: bytes | bytearray) -> None:
+        """Write raw bytes WITHOUT auto-aligning first.
+
+        Uses a fast memcpy path when already byte-aligned, otherwise
+        falls back to bit-level writes.
+        """
+        if (self._write_bit_pos & 7) == 0:
+            n = len(data) * 8
+            self._ensure_capacity(n)
+            idx = self._write_bit_pos >> 3
+            self._buf[idx : idx + len(data)] = data
+            self._write_bit_pos += n
+        else:
+            for byte in data:
+                self.write_bits(byte, 8)
+
+    def read_bytes_unaligned(self, num_bytes: int) -> bytes:
+        """Read *num_bytes* raw bytes WITHOUT auto-aligning first.
+
+        Uses a fast memcpy path when already byte-aligned, otherwise
+        falls back to bit-level reads.
+
+        Raises:
+            ValueError: If there are not enough bits remaining.
+        """
+        n = num_bytes * 8
+        if self._read_bit_pos + n > self._write_bit_pos:
+            raise ValueError(f"Cannot read {num_bytes} bytes unaligned, only {self.unread_bits} bits available")
+        if (self._read_bit_pos & 7) == 0:
+            idx = self._read_bit_pos >> 3
+            result = bytes(self._buf[idx : idx + num_bytes])
+            self._read_bit_pos += n
+            return result
+        else:
+            return bytes(self.read_bits(8) for _ in range(num_bytes))
+
+    # ------------------------------------------------------------------
     # Bit-level read
     # ------------------------------------------------------------------
 

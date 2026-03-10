@@ -183,7 +183,7 @@ class TestSplitTrackerEviction:
         raw = encode_datagram(0, [frame])
         layer.on_datagram_received(raw, now)
 
-        assert layer._split_trackers[5].created_at == 42.0
+        assert layer._split_trackers[5].last_update_time == 42.0
 
 
 # -----------------------------------------------------------------------

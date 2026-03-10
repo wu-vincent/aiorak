@@ -116,6 +116,36 @@ async def test_rapid_connect_disconnect(server_factory):
 
 
 @pytest.mark.timeout(10)
+async def test_incompatible_protocol_version(server_factory):
+    """Client with a different protocol version is rejected by the server.
+
+    The server responds with ID_INCOMPATIBLE_PROTOCOL_VERSION and the client
+    fails to connect (times out because the rejection is not a valid handshake reply).
+    """
+
+    async def _noop_handler(conn):
+        async for _ in conn:
+            pass
+
+    server = await server_factory(handler=_noop_handler)
+    addr = server.local_address
+
+    with pytest.raises(asyncio.TimeoutError):
+        await aiorak.connect(addr, timeout=1.0, protocol_version=99)
+
+    # Server should have no connected peers
+    assert len(server._peers) == 0
+
+    # Verify the server still accepts clients with the correct protocol version
+    client = await aiorak.connect(addr, timeout=5.0)
+    try:
+        await wait_for_peers(server, 1, timeout=5.0)
+        assert client.is_connected
+    finally:
+        await client.close()
+
+
+@pytest.mark.timeout(10)
 async def test_cancelled_connect(server_factory):
     """Start a connection and close it immediately before the handshake completes.
 

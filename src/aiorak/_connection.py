@@ -29,6 +29,7 @@ from ._constants import (
     ID_CONNECTION_REQUEST_ACCEPTED,
     ID_DETECT_LOST_CONNECTIONS,
     ID_DISCONNECTION_NOTIFICATION,
+    ID_INCOMPATIBLE_PROTOCOL_VERSION,
     ID_NEW_INCOMING_CONNECTION,
     ID_OPEN_CONNECTION_REPLY_1,
     ID_OPEN_CONNECTION_REPLY_2,
@@ -125,6 +126,7 @@ class Connection:
         self._mtu_attempt_index: int = 0
         self._handshake_start: float = 0.0
         self._handshake_retransmit_time: float = 0.0
+        self._handshake_retransmit_count: int = 0
 
         # Server handshake tracking
         self._system_index: int = 0
@@ -307,10 +309,17 @@ class Connection:
             and not self.is_server
             and now - self._handshake_retransmit_time > 1.0
         ):
+            self._handshake_retransmit_count += 1
+            if self._handshake_retransmit_count >= 3:
+                self._mtu_attempt_index += 1
+                self._handshake_retransmit_count = 0
             pkt = self._build_open_request_1(now)
             if pkt is not None:
                 outgoing.append(pkt)
                 self._handshake_retransmit_time = now
+            else:
+                self._events.append((_Signal.DISCONNECT, b""))
+                self.state = ConnectionState.DISCONNECTED
 
         # Connected ping
         if self.state == ConnectionState.CONNECTED and now - self._last_ping_time > self._ping_interval:
@@ -348,6 +357,7 @@ class Connection:
         self._handshake_start = now
         self._last_recv_time = now
         self._mtu_attempt_index = 0
+        self._handshake_retransmit_count = 0
         self._handshake_retransmit_time = now
         return self._build_open_request_1(now)
 
@@ -441,7 +451,12 @@ class Connection:
         proto = bs.read_uint8()
         if proto != self._protocol_version:
             logger.warning("Open request 1 from %s: protocol %d != %d", self.address, proto, self._protocol_version)
-            return None
+            reject = BitStream()
+            reject.write_uint8(ID_INCOMPATIBLE_PROTOCOL_VERSION)
+            reject.write_uint8(self._protocol_version)
+            reject.write_bytes(OFFLINE_MAGIC)
+            reject.write_uint64(self.guid)
+            return reject.get_data()
 
         # MTU = total datagram size + UDP header
         incoming_mtu = len(data) + UDP_HEADER_SIZE

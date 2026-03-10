@@ -68,6 +68,11 @@ DATAGRAM_MESSAGE_ID_ARRAY_LENGTH: int = 512
 """Maximum datagrams tracked for ACK/NAK. Used as range list count cap.
 Matches C++ DATAGRAM_MESSAGE_ID_ARRAY_LENGTH."""
 
+MAX_SPLIT_PACKET_COUNT: int = 65536
+"""Maximum number of fragments allowed in a single split message.
+Rejects packets claiming more fragments than this as malformed.
+With a typical MTU of 1400, this allows messages up to ~90 MB."""
+
 # ---------------------------------------------------------------------------
 # Sequence number space — 24-bit unsigned integers
 # ---------------------------------------------------------------------------

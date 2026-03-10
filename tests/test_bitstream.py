@@ -199,3 +199,84 @@ class TestRawBytes:
         data = b"\xde\xad\xbe\xef"
         bs = BitStream(data)
         assert bs.read_uint32() == 0xDEADBEEF  # big-endian
+
+
+class TestCompressedUint16:
+    @pytest.mark.parametrize("value", [0, 1, 255, 256, 0xFFFF])
+    def test_round_trip(self, value):
+        bs = BitStream()
+        bs.write_compressed_uint16(value)
+        bs.reset_read()
+        assert bs.read_compressed_uint16() == value
+
+    def test_small_value_bit_count(self):
+        """Values with zero hi byte should use 9 bits (1 skip bit + 8 data)."""
+        bs = BitStream()
+        bs.write_compressed_uint16(42)
+        assert bs.write_bit_position == 9
+
+    def test_large_value_bit_count(self):
+        """Values with nonzero hi byte should use 17 bits (1 flag + 8 + 8)."""
+        bs = BitStream()
+        bs.write_compressed_uint16(256)
+        assert bs.write_bit_position == 17
+
+
+class TestCompressedUint32:
+    @pytest.mark.parametrize(
+        "value",
+        [0, 255, 256, 65535, 65536, 0xFFFFFF, 0x1000000, 0xFFFFFFFF],
+    )
+    def test_round_trip(self, value):
+        bs = BitStream()
+        bs.write_compressed_uint32(value)
+        bs.reset_read()
+        assert bs.read_compressed_uint32() == value
+
+    def test_bit_counts(self):
+        """Verify compressed encoding uses expected bit counts."""
+        # 1 byte value: 3 skip bits + 8 data = 11
+        bs = BitStream()
+        bs.write_compressed_uint32(42)
+        assert bs.write_bit_position == 11
+
+        # 2 byte value: 2 skip bits + 1 flag + 16 data = 19
+        bs = BitStream()
+        bs.write_compressed_uint32(256)
+        assert bs.write_bit_position == 19
+
+        # 3 byte value: 1 skip + 1 flag + 24 data = 26
+        bs = BitStream()
+        bs.write_compressed_uint32(65536)
+        assert bs.write_bit_position == 26
+
+        # 4 byte value: 1 flag + 32 data = 33
+        bs = BitStream()
+        bs.write_compressed_uint32(0x1000000)
+        assert bs.write_bit_position == 33
+
+
+class TestUnalignedBytes:
+    def test_unaligned_write_read(self):
+        """Write bytes at a non-byte boundary, read back correctly."""
+        bs = BitStream()
+        bs.write_bits(0b101, 3)  # 3 bits offset
+        bs.write_bytes_unaligned(b"\xab\xcd")
+        bs.reset_read()
+        assert bs.read_bits(3) == 0b101
+        assert bs.read_bytes_unaligned(2) == b"\xab\xcd"
+
+    def test_aligned_fast_path(self):
+        """When already aligned, unaligned methods use fast memcpy path."""
+        bs = BitStream()
+        payload = b"\x01\x02\x03\x04\x05"
+        bs.write_bytes_unaligned(payload)
+        bs.reset_read()
+        assert bs.read_bytes_unaligned(5) == payload
+
+    def test_read_past_end_raises(self):
+        bs = BitStream()
+        bs.write_uint8(0xFF)
+        bs.reset_read()
+        with pytest.raises(ValueError):
+            bs.read_bytes_unaligned(2)

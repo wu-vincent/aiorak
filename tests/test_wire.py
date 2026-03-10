@@ -157,3 +157,54 @@ class TestDatagram:
         assert header.is_ack is True
         assert header.has_b_and_as is True
         assert ranges == [(1, 1)]
+
+
+class TestRangeListWireLayout:
+    def test_range_list_byte_layout(self):
+        """Range list uses aligned uint16 count and uint8 minEqualsMax flag."""
+        bs = BitStream()
+        encode_range_list(bs, [(5, 5)])
+        # uint16(1) = 2 bytes, uint8(1) = 1 byte, uint24(5) = 3 bytes = 6 bytes total
+        assert bs.get_byte_length() == 6
+        bs.reset_read()
+        assert decode_range_list(bs) == [(5, 5)]
+
+    def test_range_list_with_range(self):
+        bs = BitStream()
+        encode_range_list(bs, [(1, 10)])
+        # uint16(1) = 2 bytes, uint8(0) = 1 byte, uint24(1) + uint24(10) = 6 bytes = 9 bytes
+        assert bs.get_byte_length() == 9
+        bs.reset_read()
+        assert decode_range_list(bs) == [(1, 10)]
+
+
+class TestUnalignedPayload:
+    def test_unreliable_frame_unaligned_payload(self):
+        """UNRELIABLE frames use unaligned payload path and round-trip correctly."""
+        frame = MessageFrame(reliability=Reliability.UNRELIABLE, data=b"\x86hello world!")
+        bs = BitStream()
+        encode_message_frame(bs, frame)
+        bs.reset_read()
+        decoded = decode_message_frame(bs)
+        assert decoded is not None
+        assert decoded.data == b"\x86hello world!"
+
+    def test_reliable_ordered_frame_data_integrity(self):
+        """RELIABLE_ORDERED frame encode/decode preserves all fields and data."""
+        frame = MessageFrame(
+            reliability=Reliability.RELIABLE_ORDERED,
+            data=b"\x86payload bytes here",
+            reliable_message_number=100,
+            ordering_index=42,
+            ordering_channel=5,
+        )
+        bs = BitStream()
+        encode_message_frame(bs, frame)
+        bs.reset_read()
+        decoded = decode_message_frame(bs)
+        assert decoded is not None
+        assert decoded.reliability == Reliability.RELIABLE_ORDERED
+        assert decoded.data == b"\x86payload bytes here"
+        assert decoded.reliable_message_number == 100
+        assert decoded.ordering_index == 42
+        assert decoded.ordering_channel == 5
