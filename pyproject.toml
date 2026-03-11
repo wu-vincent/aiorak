@@ -33,6 +33,7 @@ Repository = "https://github.com/MagicDroidX/aiorak"
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
     "pytest-xdist>=3.0",
     "ruff>=0.9",
 ]
@@ -48,3 +49,10 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "timeout: set a timeout for the test (informational only)",
 ]
+
+[tool.coverage.run]
+source = ["aiorak"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
