@@ -169,6 +169,16 @@ class Client:
             return self._socket.local_address
         return ("0.0.0.0", 0)
 
+    @property
+    def mtu(self) -> int:
+        """The negotiated MTU for this connection.
+
+        Matches C++ ``RakPeer::GetMTUSize()`` (``RakPeer.cpp:2572``).
+        """
+        if self._connection is not None:
+            return self._connection.mtu
+        return 0
+
     # ------------------------------------------------------------------
     # Sending
     # ------------------------------------------------------------------

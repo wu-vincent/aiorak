@@ -61,6 +61,8 @@ async def create_server(
     max_mtu: int | None = None,
     min_mtu: int | None = None,
     num_internal_ids: int | None = None,
+    timeout: float | None = None,
+    rate_limit_ips: bool = False,
 ) -> Server:
     """Create and start a RakNet server bound to *address*.
 
@@ -74,6 +76,10 @@ async def create_server(
         min_mtu: Smallest MTU accepted during handshake.
         num_internal_ids: Number of internal addresses in the reliable
             handshake (default 10, some forks use 20).
+        timeout: Default connection timeout in seconds.
+        rate_limit_ips: If ``True``, reject connections from
+            IPs that connected within the last 100 ms (C++
+            ``SetLimitIPConnectionFrequency``).
 
     Returns:
         A started :class:`Server` instance.
@@ -86,7 +92,11 @@ async def create_server(
 
         server = await aiorak.create_server(('0.0.0.0', 19132), handler)
     """
-    kwargs: dict = {"max_connections": max_connections, "guid": guid}
+    kwargs: dict = {
+        "max_connections": max_connections,
+        "guid": guid,
+        "rate_limit_ips": rate_limit_ips,
+    }
     if protocol_version is not None:
         kwargs["protocol_version"] = protocol_version
     if max_mtu is not None:
@@ -95,6 +105,8 @@ async def create_server(
         kwargs["min_mtu"] = min_mtu
     if num_internal_ids is not None:
         kwargs["num_internal_ids"] = num_internal_ids
+    if timeout is not None:
+        kwargs["timeout"] = timeout
     server = Server(address, handler, **kwargs)
     await server.start()
     return server
