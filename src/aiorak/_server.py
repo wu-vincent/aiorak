@@ -23,8 +23,10 @@ from collections.abc import Awaitable, Callable
 from ._bitstream import BitStream
 from ._connection import Connection, ConnectionState, _Signal
 from ._constants import (
+    ID_ALREADY_CONNECTED,
     ID_NO_FREE_INCOMING_CONNECTIONS,
     ID_OPEN_CONNECTION_REQUEST_1,
+    ID_OPEN_CONNECTION_REQUEST_2,
     ID_UNCONNECTED_PING,
     ID_UNCONNECTED_PING_OPEN_CONNECTIONS,
     ID_UNCONNECTED_PONG,
@@ -73,6 +75,7 @@ class Server:
         self._num_internal_ids = num_internal_ids
 
         self._connections: dict[tuple[str, int], Connection] = {}
+        self._guid_to_addr: dict[int, tuple[str, int]] = {}
         self._peers: dict[tuple[str, int], Connection] = {}
         self._handler_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._socket: UDPSocket | None = None
@@ -136,6 +139,7 @@ class Server:
         self._handler_tasks.clear()
         self._peers.clear()
         self._connections.clear()
+        self._guid_to_addr.clear()
         if self._socket is not None:
             self._socket.close()
         self._closed_event.set()
@@ -212,11 +216,74 @@ class Server:
         if conn is None:
             return
 
+        # GUID duplicate check at OCR2 — matches C++ RakPeer.cpp:5255-5297.
+        # C++ checks both IP and GUID with a 4-way matrix before allowing
+        # the connection to proceed past the offline handshake.
+        if (
+            len(data) >= 17
+            and data[0] == ID_OPEN_CONNECTION_REQUEST_2
+            and data[1:17] == OFFLINE_MAGIC
+        ):
+            rejection = self._check_guid_duplicate(data, addr)
+            if rejection is not None:
+                self._send_raw(rejection, addr)
+                return
+
         responses = conn.on_datagram(data, now)
         for resp in responses:
             self._send_raw(resp, addr)
 
         self._process_signals(addr, conn)
+
+    def _check_guid_duplicate(self, data: bytes, addr: tuple[str, int]) -> bytes | None:
+        """Check for GUID conflicts at OCR2, matching C++ RakPeer.cpp:5255-5297.
+
+        C++ uses a 4-way decision matrix based on whether the IP address and
+        GUID are already in use by active connections:
+
+        - IP in use + GUID in use → resend reply if same UNVERIFIED connection,
+          else ``ID_ALREADY_CONNECTED``
+        - IP not in use + GUID in use → ``ID_ALREADY_CONNECTED``
+        - IP in use + GUID not in use → ``ID_ALREADY_CONNECTED``
+        - Neither in use → allow connection
+
+        In Python, "IP in use" for the *same* address is handled by the normal
+        Connection resend path (outcome 1 in C++).  This method catches the
+        remaining cases: when a *different* address tries to reuse an existing
+        GUID, or a known address arrives with a different GUID while the old
+        GUID is still active.
+
+        Returns:
+            An ``ID_ALREADY_CONNECTED`` rejection packet, or ``None`` to allow.
+        """
+        try:
+            bs = BitStream(data)
+            bs.read_uint8()  # msg ID
+            bs.read_bytes(16)  # OFFLINE_MAGIC
+            _binding_addr = bs.read_address()
+            _mtu = bs.read_uint16()
+            guid = bs.read_uint64()
+        except (ValueError, IndexError):
+            return None  # Malformed — let Connection handle/reject
+
+        existing_addr = self._guid_to_addr.get(guid)
+        if existing_addr is not None and existing_addr != addr:
+            # GUID already in use by a different address (C++ outcome 3)
+            existing_conn = self._connections.get(existing_addr)
+            if existing_conn is not None and existing_conn.state != ConnectionState.DISCONNECTED:
+                logger.warning(
+                    "GUID %016x from %s already connected from %s, rejecting",
+                    guid, addr, existing_addr,
+                )
+                reject = BitStream()
+                reject.write_uint8(ID_ALREADY_CONNECTED)
+                reject.write_bytes(OFFLINE_MAGIC)
+                reject.write_uint64(self._guid)
+                return reject.get_data()
+
+        # Track the GUID → address mapping
+        self._guid_to_addr[guid] = addr
+        return None
 
     def _process_signals(self, addr: tuple[str, int], conn: Connection) -> None:
         """Process connection signals and route to peers."""
@@ -226,9 +293,14 @@ class Server:
                 task = asyncio.create_task(self._run_handler(addr, conn))
                 self._handler_tasks[addr] = task
             elif signal == _Signal.DISCONNECT:
-                conn = self._peers.pop(addr, None)
-                if conn is not None:
-                    conn._feed_disconnect()
+                disconn_conn = self._peers.pop(addr, None)
+                if disconn_conn is not None:
+                    disconn_conn._feed_disconnect()
+                # Clean up GUID mapping (C++ frees the RemoteSystemStruct).
+                # Use the Connection from _connections if not yet promoted to peer.
+                guid_conn = disconn_conn or self._connections.get(addr)
+                if guid_conn is not None and guid_conn.remote_guid and self._guid_to_addr.get(guid_conn.remote_guid) == addr:
+                    del self._guid_to_addr[guid_conn.remote_guid]
                 self._connections.pop(addr, None)
                 self._handler_tasks.pop(addr, None)
             elif signal == _Signal.RECEIVE:
