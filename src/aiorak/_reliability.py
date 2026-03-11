@@ -19,7 +19,7 @@ from ._constants import (
     SEQ_NUM_MAX,
     UDP_HEADER_SIZE,
 )
-from ._types import Reliability
+from ._types import Priority, Reliability
 from ._wire import (
     DatagramHeader,
     MessageFrame,
@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 HALF_SEQ = (SEQ_NUM_MAX + 1) // 2
+
+# Sub-key used for RELIABLE_ORDERED entries in the ordering heap.
+# Sequenced entries use their sequencing_index (always < 1048575), so ordered
+# entries sort *after* all sequenced entries with the same ordering_index.
+# This matches the C++ weight scheme (ReliabilityLayer.cpp:1436-1446).
+_ORDERED_SUBKEY = 1048575
 
 # ---------------------------------------------------------------------------
 # Internal data structures
@@ -88,6 +94,10 @@ class _ReliableMessageWindow:
 
         # Behind the base (wrapped around) — duplicate
         if hole_count >= HALF_SEQ:
+            return False
+
+        # Safety cap: reject absurdly large gaps (C++ ReliabilityLayer.cpp:971)
+        if hole_count > 1000000:
             return False
 
         if hole_count == 0:
@@ -180,8 +190,13 @@ class ReliabilityLayer:
         self._next_sequencing_index: list[int] = [0] * NUMBER_OF_ORDERED_STREAMS
         self._next_split_id: int = 0
 
-        # --- Send queue ---
-        self._send_queue: list[MessageFrame] = []
+        # --- Send queue (priority heap) ---
+        # Each entry is (weight, counter, frame) for priority-weighted scheduling
+        # matching C++ ReliabilityLayer.cpp:3925-3945.
+        self._send_queue: list[tuple[int, int, MessageFrame]] = []
+        self._send_queue_counter: int = 0
+        self._priority_next_weights: list[int] = [0] * 4
+        self._init_priority_weights()
 
         # --- Message-level resend buffer (keyed by reliable_message_number) ---
         self._resend_buffer: dict[int, _InFlightMessage] = {}
@@ -198,8 +213,14 @@ class ReliabilityLayer:
         # Reliable message deduplication
         self._reliable_message_window: _ReliableMessageWindow = _ReliableMessageWindow()
 
-        # Ordering heaps per channel: list of (ordering_index, data_bytes)
-        self._ordering_heaps: list[list[tuple[int, bytes]]] = [[] for _ in range(NUMBER_OF_ORDERED_STREAMS)]
+        # Ordering heaps per channel.
+        # Each entry is (ordering_index, sub_key, counter, is_ordered, data).
+        #   sub_key = sequencing_index for sequenced, _ORDERED_SUBKEY for ordered.
+        # This weighted scheme matches C++ ReliabilityLayer.cpp:1436-1446.
+        self._ordering_heaps: list[list[tuple[int, int, int, bool, bytes]]] = [
+            [] for _ in range(NUMBER_OF_ORDERED_STREAMS)
+        ]
+        self._heap_counter: int = 0
         self._expected_ordering_index: list[int] = [0] * NUMBER_OF_ORDERED_STREAMS
 
         # Sequencing: highest seen index per channel (-1 = never seen)
@@ -210,6 +231,33 @@ class ReliabilityLayer:
 
         # Completed messages ready for the application
         self._receive_queue: list[tuple[bytes, int]] = []
+
+        # Track last reliable send time for keepalive (C++ lastReliableSend)
+        self._last_reliable_send: float = 0.0
+
+        # Unreliable message timeout for queue culling (C++ unreliableTimeout)
+        self._unreliable_timeout: float = 0.0
+
+    def _init_priority_weights(self) -> None:
+        """Initialize priority heap weights matching C++ InitHeapWeights.
+
+        The C++ scheme uses ``(1<<p)*p+p`` as the base step for each priority
+        level, ensuring that higher-priority messages (lower ``p``) get smaller
+        weights and thus sort first in the min-heap.  Over many messages this
+        gives a fair 2:1 ratio between adjacent levels.
+        """
+        for p in range(4):
+            self._priority_next_weights[p] = (1 << p) * p + p
+
+    def _get_next_weight(self, priority: int) -> int:
+        """Return the next heap weight for *priority*, advancing the counter.
+
+        Matches C++ ``ReliabilityLayer::GetNextWeight``.
+        """
+        w = self._priority_next_weights[priority]
+        step = (1 << priority) * (priority + 1) + priority
+        self._priority_next_weights[priority] = w + step
+        return w
 
     @property
     def has_pending_data(self) -> bool:
@@ -225,12 +273,19 @@ class ReliabilityLayer:
         data: bytes,
         reliability: Reliability = Reliability.RELIABLE_ORDERED,
         ordering_channel: int = 0,
+        priority: Priority = Priority.MEDIUM,
     ) -> None:
         """Enqueue a message for transmission.
 
         Large messages are automatically split into fragments that fit within
         the negotiated MTU.  Split packets are upgraded to reliable delivery
         matching C++ ``ReliabilityLayer.cpp:1608-1621``.
+
+        Args:
+            data: Raw payload bytes.
+            reliability: Delivery guarantee.
+            ordering_channel: Ordering channel (0–31).
+            priority: Send priority (IMMEDIATE/HIGH/MEDIUM/LOW).
         """
         if not (0 <= ordering_channel < NUMBER_OF_ORDERED_STREAMS):
             raise ValueError(f"ordering_channel must be in [0, {NUMBER_OF_ORDERED_STREAMS}), got {ordering_channel}")
@@ -238,7 +293,7 @@ class ReliabilityLayer:
 
         if len(data) <= max_payload:
             frame = self._build_frame(data, reliability, ordering_channel)
-            self._send_queue.append(frame)
+            self._enqueue_frame(frame, priority)
         else:
             # Split reliability upgrade (C++ ReliabilityLayer.cpp:1608-1621)
             if reliability == Reliability.UNRELIABLE:
@@ -247,7 +302,13 @@ class ReliabilityLayer:
                 reliability = Reliability.RELIABLE_WITH_ACK_RECEIPT
             elif reliability == Reliability.UNRELIABLE_SEQUENCED:
                 reliability = Reliability.RELIABLE_SEQUENCED
-            self._split_and_queue(data, reliability, ordering_channel, max_payload)
+            self._split_and_queue(data, reliability, ordering_channel, max_payload, priority)
+
+    def _enqueue_frame(self, frame: MessageFrame, priority: Priority = Priority.MEDIUM) -> None:
+        """Push a frame onto the priority send queue."""
+        weight = self._get_next_weight(priority.value)
+        self._send_queue_counter += 1
+        heapq.heappush(self._send_queue, (weight, self._send_queue_counter, frame))
 
     # ------------------------------------------------------------------
     # Incoming datagram processing
@@ -314,18 +375,34 @@ class ReliabilityLayer:
             rec = self._datagram_history.pop(seq)
             self._unacked_bytes -= rec.byte_size
 
+        # 5b. Cull stale unreliable messages from send queue (C++ unreliableTimeout)
+        if self._unreliable_timeout > 0 and self._send_queue:
+            kept: list[tuple[int, int, MessageFrame]] = []
+            for entry in self._send_queue:
+                frame = entry[2]
+                if not frame.reliability.is_reliable and hasattr(frame, "_creation_time"):
+                    if now - frame._creation_time > self._unreliable_timeout:
+                        continue
+                kept.append(entry)
+            if len(kept) != len(self._send_queue):
+                self._send_queue = kept
+                heapq.heapify(self._send_queue)
+
         # 6. Build datagrams
-        datagram_overhead = 4
+        # C++ DatagramHeaderFormat::GetDataHeaderByteLength() = 2 + 3 + sizeof(float) = 9
+        datagram_overhead = 9
         max_datagram_payload = self._mtu - UDP_HEADER_SIZE - datagram_overhead
 
         # 6a. Pack resend frames (bypass cwnd — separate retransmission bandwidth)
         if resend_frames:
             outgoing.extend(self._pack_datagrams(resend_frames, max_datagram_payload, now, rto, is_resend=True))
 
-        # 6b. Pack new send frames (cwnd-limited)
+        # 6b. Pack new send frames (cwnd-limited), extracted from priority heap
         if self._send_queue:
-            new_frames = self._send_queue[:]
-            self._send_queue.clear()
+            new_frames: list[MessageFrame] = []
+            while self._send_queue:
+                _w, _c, frame = heapq.heappop(self._send_queue)
+                new_frames.append(frame)
             outgoing.extend(self._pack_datagrams(new_frames, max_datagram_payload, now, rto, is_resend=False))
 
         return outgoing
@@ -348,7 +425,10 @@ class ReliabilityLayer:
             if not is_resend:
                 budget = self._cc.transmission_bandwidth(self._unacked_bytes, len(frames) - idx > 1)
                 if budget <= 0 and sent_at_least_one:
-                    self._send_queue = frames[idx:] + self._send_queue
+                    # Re-enqueue remaining frames onto the priority heap
+                    for f in frames[idx:]:
+                        self._send_queue_counter += 1
+                        heapq.heappush(self._send_queue, (0, self._send_queue_counter, f))
                     break
 
             frames_for_dg: list[MessageFrame] = []
@@ -389,9 +469,10 @@ class ReliabilityLayer:
             )
             self._unacked_bytes += len(raw)
 
-            # Update resend buffer for reliable messages
+            # Update resend buffer for reliable messages and track last reliable send
             for frame in frames_for_dg:
                 if frame.reliability.is_reliable:
+                    self._last_reliable_send = now
                     rmn = frame.reliable_message_number
                     existing = self._resend_buffer.get(rmn)
                     if existing is not None:
@@ -441,17 +522,21 @@ class ReliabilityLayer:
                 seq = (seq + 1) & SEQ_NUM_MAX
 
     def _handle_nak(self, ranges: list[tuple[int, int]]) -> None:
-        """Process NAKs — mark affected messages for immediate resend."""
+        """Process NAKs — mark affected messages for immediate resend.
+
+        Unlike ACK handling, NAK does NOT remove the datagram history entry.
+        The datagram may still arrive later and be ACK'd, so the record must
+        remain for proper congestion controller bookkeeping (C++
+        ReliabilityLayer.cpp:831-856).
+        """
         for lo, hi in ranges:
             count = ((hi - lo) & SEQ_NUM_MAX) + 1
             count = min(count, DATAGRAM_MESSAGE_ID_ARRAY_LENGTH)
             seq = lo
             for _ in range(count):
-                rec = self._datagram_history.pop(seq, None)
+                rec = self._datagram_history.get(seq)
                 if rec is not None:
-                    self._unacked_bytes -= rec.byte_size
                     self._cc.on_nak()
-                    self._cc.on_resend()
                     # Mark messages for immediate resend
                     for rmn in rec.reliable_message_numbers:
                         msg = self._resend_buffer.get(rmn)
@@ -475,6 +560,10 @@ class ReliabilityLayer:
         """
         seq = header.datagram_number
         skipped = self._cc.on_got_packet(seq, now)
+
+        # Reject packet if gap is absurdly large (C++ returns false)
+        if skipped is None:
+            return
 
         # Record for ACK
         self._add_to_ranges(self._ack_ranges, seq)
@@ -527,19 +616,31 @@ class ReliabilityLayer:
         ch = frame.ordering_channel
 
         if rel.is_sequenced:
-            # Wraparound-aware sequenced comparison (C++ IsOlderOrderedPacket)
-            if self._highest_sequenced[ch] == -1 or seq_greater_than(
-                frame.sequencing_index & SEQ_NUM_MAX,
-                self._highest_sequenced[ch] & SEQ_NUM_MAX,
+            # C++ checks orderingIndex FIRST for sequenced packets
+            # (ReliabilityLayer.cpp:1283-1341).
+            if frame.ordering_index == self._expected_ordering_index[ch]:
+                # Current ordering slot — check sequencing index
+                if self._highest_sequenced[ch] == -1 or seq_greater_than(
+                    frame.sequencing_index & SEQ_NUM_MAX,
+                    self._highest_sequenced[ch] & SEQ_NUM_MAX,
+                ):
+                    self._highest_sequenced[ch] = frame.sequencing_index
+                    self._receive_queue.append((frame.data, ch))
+                # else: stale sequencing index, drop
+            elif seq_greater_than(
+                frame.ordering_index & SEQ_NUM_MAX,
+                self._expected_ordering_index[ch] & SEQ_NUM_MAX,
             ):
-                self._highest_sequenced[ch] = frame.sequencing_index
-                self._receive_queue.append((frame.data, ch))
-            # else: stale packet, drop silently
+                # Future ordering slot — buffer in ordering heap
+                self._heap_counter += 1
+                heapq.heappush(
+                    self._ordering_heaps[ch],
+                    (frame.ordering_index, frame.sequencing_index, self._heap_counter, False, frame.data),
+                )
+            # else: stale ordering index, drop
 
-        elif rel == Reliability.RELIABLE_ORDERED:
-            # Only RELIABLE_ORDERED enters the ordering system.
-            # RELIABLE_ORDERED_WITH_ACK_RECEIPT bypasses (C++ ReliabilityLayer.cpp:1248-1251)
-            # but on the wire it's decoded as RELIABLE_ORDERED anyway.
+        elif rel.is_ordered:
+            # RELIABLE_ORDERED (and RELIABLE_ORDERED_WITH_ACK_RECEIPT on wire)
             if frame.ordering_index == self._expected_ordering_index[ch]:
                 self._receive_queue.append((frame.data, ch))
                 self._expected_ordering_index[ch] = (self._expected_ordering_index[ch] + 1) & SEQ_NUM_MAX
@@ -549,25 +650,35 @@ class ReliabilityLayer:
                 frame.ordering_index & SEQ_NUM_MAX,
                 self._expected_ordering_index[ch] & SEQ_NUM_MAX,
             ):
+                self._heap_counter += 1
                 heapq.heappush(
                     self._ordering_heaps[ch],
-                    (frame.ordering_index, frame.data),
+                    (frame.ordering_index, _ORDERED_SUBKEY, self._heap_counter, True, frame.data),
                 )
             # else: stale ordering index, silently drop
 
         else:
             # UNRELIABLE, RELIABLE, *_WITH_ACK_RECEIPT — deliver directly
-            # Use frame.ordering_channel instead of hardcoded 0
             self._receive_queue.append((frame.data, ch))
 
     def _flush_ordering_heap(self, channel: int) -> None:
-        """Deliver buffered ordered messages that are now sequential."""
+        """Deliver buffered ordered/sequenced messages that are now sequential.
+
+        Matches C++ ReliabilityLayer.cpp:1372-1423: when popping from the
+        ordering heap, ordered items advance ``orderedReadIndex`` and reset
+        the sequencing counter, while sequenced items only update the
+        highest-seen sequencing index.
+        """
         heap = self._ordering_heaps[channel]
         while heap and heap[0][0] == self._expected_ordering_index[channel]:
-            _, data = heapq.heappop(heap)
+            _oi, _sub, _cnt, is_ordered, data = heapq.heappop(heap)
             self._receive_queue.append((data, channel))
-            self._expected_ordering_index[channel] = (self._expected_ordering_index[channel] + 1) & SEQ_NUM_MAX
-            self._highest_sequenced[channel] = -1
+            if is_ordered:
+                self._expected_ordering_index[channel] = (self._expected_ordering_index[channel] + 1) & SEQ_NUM_MAX
+                self._highest_sequenced[channel] = -1
+            else:
+                # Sequenced: update highest seen but do NOT advance ordering index
+                self._highest_sequenced[channel] = _sub  # _sub is sequencing_index
 
     # ------------------------------------------------------------------
     # Split packet reassembly
@@ -662,6 +773,7 @@ class ReliabilityLayer:
         reliability: Reliability,
         channel: int,
         max_payload: int,
+        priority: Priority = Priority.MEDIUM,
     ) -> None:
         """Split a large message into MTU-sized fragments and enqueue them.
 
@@ -692,7 +804,7 @@ class ReliabilityLayer:
                 split_packet_id=split_id,
                 split_packet_index=i,
             )
-            self._send_queue.append(frame)
+            self._enqueue_frame(frame, priority)
 
     # ------------------------------------------------------------------
     # MTU-limited ACK/NAK packets
@@ -742,8 +854,13 @@ class ReliabilityLayer:
     # ------------------------------------------------------------------
 
     def _max_payload_per_frame(self, reliability: Reliability) -> int:
-        """Calculate the maximum user-data bytes per message frame."""
-        overhead = UDP_HEADER_SIZE + 4 + 13 + 10
+        """Calculate the maximum user-data bytes per message frame.
+
+        Overhead breakdown: UDP header + datagram header (9 bytes, C++
+        DatagramHeaderFormat) + max message frame header (13 bytes) + max
+        split header (10 bytes).
+        """
+        overhead = UDP_HEADER_SIZE + 9 + 13 + 10
         return max(self._mtu - overhead, 64)
 
     @staticmethod

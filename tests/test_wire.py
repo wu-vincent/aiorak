@@ -208,3 +208,71 @@ class TestUnalignedPayload:
         assert decoded.reliable_message_number == 100
         assert decoded.ordering_index == 42
         assert decoded.ordering_channel == 5
+
+
+class TestPostDecodeValidation:
+    """Malformed frames are rejected by post-decode validation."""
+
+    def test_zero_data_bit_length_rejected(self):
+        """dataBitLength == 0 should return None."""
+        bs = BitStream()
+        # 3 bits reliability (UNRELIABLE = 0), 1 bit has_split = 0
+        bs.write_bits(0, 3)
+        bs.write_bit(False)
+        bs.align_write_to_byte()
+        # data_bit_length = 0
+        bs.write_uint16(0)
+        bs.reset_read()
+        assert decode_message_frame(bs) is None
+
+    def test_ordering_channel_32_rejected(self):
+        """orderingChannel >= 32 should return None."""
+        bs = BitStream()
+        # RELIABLE_ORDERED = 3
+        bs.write_bits(3, 3)
+        bs.write_bit(False)  # no split
+        bs.align_write_to_byte()
+        bs.write_uint16(8)  # 1 byte of data
+        bs.write_uint24(0)  # reliable_message_number
+        bs.align_write_to_byte()
+        bs.write_uint24(0)  # ordering_index
+        bs.write_uint8(32)  # ordering_channel = 32 (invalid)
+        bs.write_bytes(b"\x00")  # payload
+        bs.reset_read()
+        assert decode_message_frame(bs) is None
+
+    def test_split_index_ge_count_rejected(self):
+        """splitPacketIndex >= splitPacketCount should return None."""
+        bs = BitStream()
+        # RELIABLE = 2
+        bs.write_bits(2, 3)
+        bs.write_bit(True)  # has split
+        bs.align_write_to_byte()
+        bs.write_uint16(8)  # 1 byte of data
+        bs.write_uint24(0)  # reliable_message_number
+        bs.align_write_to_byte()
+        # split info
+        bs.write_uint32(3)  # split_count = 3
+        bs.write_uint16(1)  # split_id
+        bs.write_uint32(3)  # split_index = 3 (invalid, must be < 3)
+        bs.write_bytes(b"\x00")  # payload
+        bs.reset_read()
+        assert decode_message_frame(bs) is None
+
+    def test_valid_split_accepted(self):
+        """splitPacketIndex < splitPacketCount should be accepted."""
+        bs = BitStream()
+        bs.write_bits(2, 3)
+        bs.write_bit(True)
+        bs.align_write_to_byte()
+        bs.write_uint16(8)
+        bs.write_uint24(0)
+        bs.align_write_to_byte()
+        bs.write_uint32(3)  # split_count = 3
+        bs.write_uint16(1)  # split_id
+        bs.write_uint32(2)  # split_index = 2 (valid)
+        bs.write_bytes(b"\x00")
+        bs.reset_read()
+        decoded = decode_message_frame(bs)
+        assert decoded is not None
+        assert decoded.split_packet_index == 2

@@ -119,6 +119,20 @@ class CongestionController:
             return int(self.cwnd - unacked_bytes)
         return 0
 
+    def retransmission_bandwidth(self, unacked_bytes: int) -> int:
+        """Return the number of bytes available for retransmission.
+
+        C++ ``CCRakNetSlidingWindow::GetRetransmissionBandwidth`` returns
+        ``unacknowledgedBytes`` — effectively unlimited retransmission.
+
+        Args:
+            unacked_bytes: Total bytes currently in-flight (unacknowledged).
+
+        Returns:
+            Allowed retransmission budget in bytes.
+        """
+        return unacked_bytes
+
     # ------------------------------------------------------------------
     # ACK handling
     # ------------------------------------------------------------------
@@ -136,7 +150,7 @@ class CongestionController:
             return True
         return self.oldest_unsent_ack > 0.0 and now >= self.oldest_unsent_ack + SYN_INTERVAL
 
-    def on_got_packet(self, seq: int, now: float) -> int:
+    def on_got_packet(self, seq: int, now: float) -> int | None:
         """Record reception of a data datagram and return the gap count.
 
         Args:
@@ -144,8 +158,9 @@ class CongestionController:
             now: Current monotonic time in seconds.
 
         Returns:
-            Number of datagrams skipped (for NAK generation), or 0 if this
-            is the expected next sequence number.
+            Number of datagrams skipped (for NAK generation), 0 if this is
+            the expected next sequence number, or ``None`` if the packet
+            should be rejected entirely (gap > 50 000, matching C++).
         """
         if self.oldest_unsent_ack == 0.0:
             self.oldest_unsent_ack = now
@@ -156,6 +171,8 @@ class CongestionController:
 
         if seq_greater_than(seq, self.expected_next_seq):
             skipped = (seq - self.expected_next_seq) & SEQ_NUM_MAX
+            if skipped > 50000:
+                return None  # reject packet (C++ CCRakNetSlidingWindow.cpp:147)
             skipped = min(skipped, 1000)
             self.expected_next_seq = (seq + 1) & SEQ_NUM_MAX
             return skipped

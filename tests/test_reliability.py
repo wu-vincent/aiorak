@@ -25,7 +25,8 @@ class TestSend:
         layer = _make_layer()
         layer.send(b"\x86hello")
         assert len(layer._send_queue) == 1
-        assert layer._send_queue[0].data == b"\x86hello"
+        # _send_queue entries are (weight, counter, frame) tuples
+        assert layer._send_queue[0][2].data == b"\x86hello"
 
     def test_update_produces_datagrams(self):
         layer = _make_layer()
@@ -49,7 +50,7 @@ class TestSplitReassembly:
         # All fragments should be queued
         assert len(layer._send_queue) > 1
         # All should have split fields set
-        for frame in layer._send_queue:
+        for _w, _c, frame in layer._send_queue:
             assert frame.split_packet_count > 1
 
     def test_reassemble_split(self):
@@ -170,22 +171,23 @@ class TestOrdering:
 class TestSequencing:
     def test_sequencing_drops_stale(self):
         layer = _make_layer()
-        # Send sequenced index 5 first
+        # Send sequenced index 5 first — ordering_index must match expected (0)
+        # for immediate delivery (C++ checks orderingIndex first).
         frame5 = MessageFrame(
             reliability=Reliability.UNRELIABLE_SEQUENCED,
             data=b"new",
             sequencing_index=5,
-            ordering_index=5,
+            ordering_index=0,
             ordering_channel=0,
         )
         layer.on_datagram_received(encode_datagram(0, [frame5]), time.monotonic())
 
-        # Send sequenced index 3 — should be dropped (stale)
+        # Send sequenced index 3 — should be dropped (stale sequencing)
         frame3 = MessageFrame(
             reliability=Reliability.UNRELIABLE_SEQUENCED,
             data=b"old",
             sequencing_index=3,
-            ordering_index=3,
+            ordering_index=0,
             ordering_channel=0,
         )
         layer.on_datagram_received(encode_datagram(1, [frame3]), time.monotonic())
@@ -415,14 +417,14 @@ class TestSplitReliabilityUpgrade:
         large_data = b"\x86" + bytes(range(256)) * 10
         layer.send(large_data, reliability=Reliability.UNRELIABLE)
         # All fragments should be RELIABLE (upgraded from UNRELIABLE)
-        for frame in layer._send_queue:
+        for _w, _c, frame in layer._send_queue:
             assert frame.reliability == Reliability.RELIABLE
 
     def test_unreliable_sequenced_split_upgraded(self):
         layer = _make_layer(mtu=600)
         large_data = b"\x86" + bytes(range(256)) * 10
         layer.send(large_data, reliability=Reliability.UNRELIABLE_SEQUENCED)
-        for frame in layer._send_queue:
+        for _w, _c, frame in layer._send_queue:
             assert frame.reliability == Reliability.RELIABLE_SEQUENCED
 
 
@@ -481,3 +483,34 @@ class TestWraparound:
         layer._next_sequencing_index[0] = SEQ_NUM_MAX
         layer.send(b"test", Reliability.UNRELIABLE_SEQUENCED, 0)
         assert layer._next_sequencing_index[0] == 0
+
+
+class TestPriorityQueue:
+    """Tests for priority-weighted send queue."""
+
+    def test_immediate_before_low(self):
+        """IMMEDIATE priority messages should be sent before LOW priority."""
+        from aiorak._types import Priority
+
+        layer = _make_layer()
+        layer.send(b"\x86low", Reliability.RELIABLE, 0, Priority.LOW)
+        layer.send(b"\x86imm", Reliability.RELIABLE, 0, Priority.IMMEDIATE)
+        now = time.monotonic()
+        datagrams = layer.update(now)
+        # Both should be sent; first datagram frame should be the IMMEDIATE one
+        assert len(datagrams) >= 1
+        _, frames = decode_datagram(datagrams[0])
+        assert frames[0].data == b"\x86imm"
+
+    def test_high_before_medium(self):
+        """HIGH priority messages should be sent before MEDIUM priority."""
+        from aiorak._types import Priority
+
+        layer = _make_layer()
+        layer.send(b"\x86med", Reliability.RELIABLE, 0, Priority.MEDIUM)
+        layer.send(b"\x86high", Reliability.RELIABLE, 0, Priority.HIGH)
+        now = time.monotonic()
+        datagrams = layer.update(now)
+        assert len(datagrams) >= 1
+        _, frames = decode_datagram(datagrams[0])
+        assert frames[0].data == b"\x86high"

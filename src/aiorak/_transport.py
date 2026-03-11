@@ -13,6 +13,8 @@ Classes:
 
 import asyncio
 import logging
+import socket
+import sys
 from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
@@ -42,12 +44,47 @@ class RakNetTransport(asyncio.DatagramProtocol):
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         """Called when the UDP socket is ready.
 
-        Stores a reference to the transport for sending.
+        Stores a reference to the transport for sending.  Configures socket
+        options to match C++ RakNet behaviour:
+
+        * ``SO_RCVBUF`` = 256 KB  (RakPeer.cpp:593)
+        * ``SO_BROADCAST`` = 1     (RakPeer.cpp:561)
+        * ``IP_DONTFRAGMENT``      (RakPeer.cpp:567, Windows only)
 
         Args:
             transport: The asyncio datagram transport.
         """
         self._transport = transport  # type: ignore[assignment]
+        sock = transport.get_extra_info("socket")
+        if sock is not None:
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 256)
+            except OSError:
+                pass
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            except OSError:
+                pass
+            # IP_DONTFRAGMENT for MTU discovery — platform-specific
+            if sys.platform == "win32":
+                try:
+                    IP_DONTFRAGMENT = 14  # Windows SIO_UDP_SET_DONTFRAGMENT
+                    sock.setsockopt(socket.IPPROTO_IP, IP_DONTFRAGMENT, 1)
+                except OSError:
+                    pass
+            elif sys.platform == "linux":
+                try:
+                    IP_MTU_DISCOVER = 10  # IP_MTU_DISCOVER
+                    IP_PMTUDISC_DO = 2
+                    sock.setsockopt(socket.IPPROTO_IP, IP_MTU_DISCOVER, IP_PMTUDISC_DO)
+                except OSError:
+                    pass
+            elif sys.platform == "darwin":
+                try:
+                    IP_DONTFRAG = 28  # macOS IP_DONTFRAG
+                    sock.setsockopt(socket.IPPROTO_IP, IP_DONTFRAG, 1)
+                except OSError:
+                    pass
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         """Called when a UDP datagram is received.

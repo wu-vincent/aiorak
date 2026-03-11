@@ -27,12 +27,14 @@ from ._constants import (
     ID_ALREADY_CONNECTED,
     ID_CONNECTED_PING,
     ID_CONNECTED_PONG,
+    ID_CONNECTION_ATTEMPT_FAILED,
     ID_CONNECTION_BANNED,
     ID_CONNECTION_REQUEST,
     ID_CONNECTION_REQUEST_ACCEPTED,
     ID_DETECT_LOST_CONNECTIONS,
     ID_DISCONNECTION_NOTIFICATION,
     ID_INCOMPATIBLE_PROTOCOL_VERSION,
+    ID_INVALID_PASSWORD,
     ID_IP_RECENTLY_CONNECTED,
     ID_NEW_INCOMING_CONNECTION,
     ID_NO_FREE_INCOMING_CONNECTIONS,
@@ -60,9 +62,7 @@ def _get_local_addresses() -> list[str]:
     with ``AF_UNSPEC`` to enumerate all local addresses, then sorts them.
     """
     try:
-        infos = _socket.getaddrinfo(
-            _socket.gethostname(), None, _socket.AF_UNSPEC, _socket.SOCK_DGRAM
-        )
+        infos = _socket.getaddrinfo(_socket.gethostname(), None, _socket.AF_UNSPEC, _socket.SOCK_DGRAM)
         seen: set[str] = set()
         addrs: list[str] = []
         for info in infos:
@@ -155,6 +155,8 @@ class Connection:
         self._last_recv_time: float = 0.0
         self._last_ping_time: float = 0.0
         self._ping_interval: float = 5.0
+        self._disconnect_on_ack_sent: bool = False
+        self._last_reliable_send_time: float = 0.0
 
         # Client handshake tracking
         self._mtu_attempt_index: int = 0
@@ -337,7 +339,14 @@ class Connection:
         outgoing: list[bytes] = []
 
         # Timeout check
-        if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED, ConnectionState.DISCONNECTING):
+        if self.state == ConnectionState.CONNECTING:
+            # C++ uses a fixed 10s timeout from connection start (RakPeer.cpp:5877-5881)
+            if self._handshake_start > 0 and now - self._handshake_start > self.timeout:
+                logger.warning("Handshake with %s timed out after %.1fs", self.address, self.timeout)
+                self._events.append((_Signal.DISCONNECT, b""))
+                self.state = ConnectionState.DISCONNECTED
+                return outgoing
+        elif self.state in (ConnectionState.CONNECTED, ConnectionState.DISCONNECTING):
             if self._last_recv_time > 0 and now - self._last_recv_time > self.timeout:
                 logger.warning("Connection to %s timed out after %.1fs", self.address, self.timeout)
                 self._events.append((_Signal.DISCONNECT, b""))
@@ -362,7 +371,16 @@ class Connection:
                 self._events.append((_Signal.DISCONNECT, b""))
                 self.state = ConnectionState.DISCONNECTED
 
-        # Connected ping
+        # Reliable keepalive — C++ sends a RELIABLE ping when no reliable data
+        # has been sent for timeoutTime/2 (RakPeer.cpp:5857-5869).
+        if self.state == ConnectionState.CONNECTED:
+            reliable_send = self._reliability._last_reliable_send
+            if reliable_send > 0 and now - reliable_send > self.timeout / 2:
+                if not self._reliability._resend_buffer:
+                    self._send_connected_ping(now, reliable=True)
+                    self._reliability._last_reliable_send = now
+
+        # Connected ping (unreliable, for latency tracking)
         if self.state == ConnectionState.CONNECTED and now - self._last_ping_time > self._ping_interval:
             self._send_connected_ping(now)
             self._last_ping_time = now
@@ -371,8 +389,14 @@ class Connection:
         if self.state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED, ConnectionState.DISCONNECTING):
             outgoing.extend(self._reliability.update(now))
 
-        # If disconnecting and all outgoing data has been flushed, complete the disconnect
-        if self.state == ConnectionState.DISCONNECTING and not self._reliability.has_pending_data:
+        # If disconnecting due to received ID_DISCONNECTION_NOTIFICATION,
+        # complete once pending ACKs are flushed (C++ DISCONNECT_ON_NO_ACK).
+        if self._disconnect_on_ack_sent and self.state == ConnectionState.DISCONNECTING:
+            if not self._reliability._ack_ranges:
+                self.state = ConnectionState.DISCONNECTED
+
+        # If disconnecting (we initiated) and all outgoing data has been flushed
+        elif self.state == ConnectionState.DISCONNECTING and not self._reliability.has_pending_data:
             self.state = ConnectionState.DISCONNECTED
             self._events.append((_Signal.DISCONNECT, b""))
 
@@ -444,16 +468,25 @@ class Connection:
             ID_ALREADY_CONNECTED,
             ID_CONNECTION_BANNED,
             ID_IP_RECENTLY_CONNECTED,
+            ID_INVALID_PASSWORD,
+            ID_CONNECTION_ATTEMPT_FAILED,
         }
     )
 
     def _is_offline_message(self, data: bytes) -> bool:
-        """Return ``True`` if *data* starts with a known offline message ID.
+        """Return ``True`` if *data* is an offline handshake message.
+
+        Checks both the message ID and the OFFLINE_MAGIC signature at offset 1,
+        matching C++ ``RakPeer.cpp:4604-4617``.  This prevents user data that
+        happens to start with bytes 5-8 from being misrouted to the offline
+        handler.
 
         Args:
             data: Raw UDP payload.
         """
-        return len(data) >= 1 and data[0] in self._OFFLINE_MSG_IDS
+        if len(data) < 17:  # 1 byte ID + 16 bytes OFFLINE_MAGIC minimum
+            return False
+        return data[0] in self._OFFLINE_MSG_IDS and data[1:17] == OFFLINE_MAGIC
 
     def _handle_offline(self, data: bytes, now: float) -> bytes | None:
         """Route offline (unconnected) handshake messages.
@@ -509,11 +542,13 @@ class Connection:
             reject.write_uint64(self.guid)
             return reject.get_data()
 
-        # MTU = total datagram size + UDP header
-        incoming_mtu = len(data) + UDP_HEADER_SIZE
+        # MTU = total datagram size + UDP header, capped to max_mtu
+        # (C++ RakPeer.cpp:5176-5179)
+        incoming_mtu = min(len(data) + UDP_HEADER_SIZE, self._max_mtu)
 
         self.state = ConnectionState.CONNECTING
         logger.debug("State -> CONNECTING for %s", self.address)
+        self._handshake_start = now
         self._last_recv_time = now
 
         # Build reply
@@ -680,9 +715,7 @@ class Connection:
         ):
             return self._handle_connection_accepted(data, now)
         elif msg_id == ID_NEW_INCOMING_CONNECTION and self.is_server and self.state == ConnectionState.CONNECTING:
-            self.state = ConnectionState.CONNECTED
-            logger.debug("State -> CONNECTED for %s", self.address)
-            self._events.append((_Signal.CONNECT, b""))
+            self._handle_new_incoming_connection(data, now)
             return None
 
         # Internal connected messages — validate expected size to avoid
@@ -693,7 +726,11 @@ class Connection:
         elif msg_id == ID_CONNECTED_PONG and len(data) == 17:
             return None  # Pong received — RTT already updated by ACK layer
         elif msg_id == ID_DISCONNECTION_NOTIFICATION and len(data) == 1:
-            self.state = ConnectionState.DISCONNECTED
+            # Don't disconnect immediately — transition to DISCONNECTING and
+            # wait for the ACK containing this datagram to be sent, matching
+            # C++ DISCONNECT_ON_NO_ACK (RakPeer.cpp:6097).
+            self.state = ConnectionState.DISCONNECTING
+            self._disconnect_on_ack_sent = True
             self._events.append((_Signal.DISCONNECT, b""))
             return None
         elif msg_id == ID_DETECT_LOST_CONNECTIONS and len(data) == 1:
@@ -741,7 +778,7 @@ class Connection:
         reply.write_int64(client_time)
         reply.write_int64(int(_time.time() * 1000))
 
-        self._reliability.send(reply.get_data(), Reliability.RELIABLE)
+        self._reliability.send(reply.get_data(), Reliability.RELIABLE_ORDERED, ordering_channel=0)
         return None
 
     def _handle_connection_accepted(self, data: bytes, now: float) -> list[bytes] | None:
@@ -783,23 +820,59 @@ class Connection:
         reply.write_int64(_reply_time)
         reply.write_int64(int(_time.time() * 1000))
 
-        self._reliability.send(reply.get_data(), Reliability.RELIABLE)
+        self._reliability.send(reply.get_data(), Reliability.RELIABLE_ORDERED, ordering_channel=0)
         return None
+
+    def _handle_new_incoming_connection(self, data: bytes, now: float) -> None:
+        """Handle ``ID_NEW_INCOMING_CONNECTION`` (server side).
+
+        Parses timestamps from the client to compute the first RTT sample,
+        then sends an immediate ping — matching C++ ``RakPeer.cpp:6005-6026``.
+        """
+        bs = BitStream(data)
+        bs.read_uint8()  # msg ID
+        try:
+            _server_addr = bs.read_address()
+            for _ in range(self._num_internal_ids):
+                bs.read_address()
+            send_ping_time = bs.read_int64()
+            _send_pong_time = bs.read_int64()
+        except (ValueError, IndexError):
+            logger.warning("Malformed ID_NEW_INCOMING_CONNECTION from %s, dropping", self.address)
+            return
+
+        # Compute first RTT from the timestamps (C++ OnConnectedPong)
+        now_ms = int(_time.time() * 1000)
+        if now_ms > send_ping_time:
+            rtt_ms = now_ms - send_ping_time
+            rtt_s = rtt_ms / 1000.0
+            self._cc.on_ack(rtt_s, self._cc.next_datagram_seq, False)
+
+        self.state = ConnectionState.CONNECTED
+        self._last_recv_time = now
+        logger.debug("State -> CONNECTED for %s", self.address)
+        self._events.append((_Signal.CONNECT, b""))
+
+        # Send immediate ping on connect (C++ PingInternal after ID_NEW_INCOMING_CONNECTION)
+        self._send_connected_ping(now)
+        self._last_ping_time = now
 
     # ------------------------------------------------------------------
     # Ping / Pong
     # ------------------------------------------------------------------
 
-    def _send_connected_ping(self, now: float) -> None:
+    def _send_connected_ping(self, now: float, *, reliable: bool = False) -> None:
         """Send an ``ID_CONNECTED_PING`` through the reliability layer.
 
         Args:
             now: Current monotonic time.
+            reliable: If True, send as RELIABLE (for keepalive detection).
         """
         bs = BitStream()
         bs.write_uint8(ID_CONNECTED_PING)
         bs.write_int64(int(now * 1000))
-        self._reliability.send(bs.get_data(), Reliability.UNRELIABLE)
+        rel = Reliability.RELIABLE if reliable else Reliability.UNRELIABLE
+        self._reliability.send(bs.get_data(), rel)
 
     def _handle_connected_ping(self, data: bytes, now: float) -> list[bytes] | None:
         """Handle ``ID_CONNECTED_PING`` and reply with ``ID_CONNECTED_PONG``.

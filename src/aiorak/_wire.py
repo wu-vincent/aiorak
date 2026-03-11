@@ -246,6 +246,16 @@ def decode_message_frame(bs: BitStream) -> MessageFrame | None:
         split_id = bs.read_uint16()
         split_index = bs.read_uint32()
 
+    # Post-decode validation (C++ ReliabilityLayer.cpp sanity checks)
+    if data_bit_length == 0:
+        return None
+    if rel_val >= 8:
+        return None
+    if reliability.is_ordered and ordering_channel >= 32:
+        return None
+    if has_split and split_index >= split_count:
+        return None
+
     # Payload
     data_byte_length = (data_bit_length + 7) // 8
     data = bs.read_bytes(data_byte_length)
