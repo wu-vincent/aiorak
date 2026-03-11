@@ -207,15 +207,17 @@ class TestAckNak:
         datagrams = layer.update(now)
         assert len(datagrams) >= 1
 
-        # The datagram should be in-flight
-        assert len(layer._in_flight) == 1
+        # The datagram should be tracked in history
+        assert len(layer._datagram_history) == 1
 
         # Feed an ACK back for datagram 0
         ack = encode_ack([(0, 0)])
         layer.on_datagram_received(ack, now + 0.01)
 
-        # In-flight should be cleared
-        assert len(layer._in_flight) == 0
+        # History should be cleared
+        assert len(layer._datagram_history) == 0
+        # Resend buffer should be cleared
+        assert len(layer._resend_buffer) == 0
 
     def test_nak_triggers_resend(self):
         layer = _make_layer()
@@ -227,8 +229,8 @@ class TestAckNak:
         nak = encode_nak([(0, 0)])
         layer.on_datagram_received(nak, now + 0.01)
 
-        # The frame should be re-queued for resend
-        assert len(layer._resend_queue) >= 1
+        # Messages should be marked for immediate resend in resend buffer
+        assert any(msg.next_action_time == 0.0 for msg in layer._resend_buffer.values())
 
     def test_rto_expiry_triggers_resend(self):
         layer = _make_layer()
@@ -236,21 +238,20 @@ class TestAckNak:
         now = time.monotonic()
         layer.update(now)
 
-        assert len(layer._in_flight) == 1
+        assert len(layer._datagram_history) == 1
 
         # Advance time past RTO (default is 2.0s when no RTT sample)
         future = now + 3.0
         datagrams = layer.update(future)
         # The expired frame should have been re-sent
-        # Either it's in the resend queue or already produced in datagrams
-        assert len(datagrams) >= 1 or len(layer._resend_queue) >= 1
+        assert len(datagrams) >= 1
 
     def test_ack_range_wrapping_at_seq_max(self):
         """ACK range spanning SEQ_NUM_MAX boundary is handled correctly."""
         layer = _make_layer()
         now = time.monotonic()
 
-        # Manually place two in-flight datagrams at the wrapping boundary
+        # Manually place datagram records and resend buffer entries at the wrapping boundary
         lo = SEQ_NUM_MAX - 1
         hi = (SEQ_NUM_MAX + 1) & SEQ_NUM_MAX  # wraps to 0
         for seq in [lo, SEQ_NUM_MAX, hi]:
@@ -259,9 +260,20 @@ class TestAckNak:
                 data=b"\x86x",
                 reliable_message_number=seq,
             )
-            from aiorak._reliability import _InFlightDatagram
+            from aiorak._reliability import _DatagramRecord, _InFlightMessage
 
-            layer._in_flight[seq] = _InFlightDatagram(seq=seq, send_time=now, frames=[frame], byte_size=10)
+            layer._datagram_history[seq] = _DatagramRecord(
+                seq=seq,
+                send_time=now,
+                reliable_message_numbers=[seq],
+                byte_size=10,
+            )
+            layer._resend_buffer[seq] = _InFlightMessage(
+                reliable_message_number=seq,
+                frame=frame,
+                next_action_time=now + 2.0,
+                retransmission_time=2.0,
+            )
             layer._unacked_bytes += 10
 
         # ACK the wrapping range
@@ -269,7 +281,8 @@ class TestAckNak:
         layer.on_datagram_received(ack, now + 0.01)
 
         # All three should be cleared
-        assert len(layer._in_flight) == 0
+        assert len(layer._datagram_history) == 0
+        assert len(layer._resend_buffer) == 0
 
 
 class TestOrderingStale:
@@ -323,3 +336,148 @@ class TestMaxSplitCount:
         # Should be rejected — no tracker created
         assert layer.poll_receive() is None
         assert len(layer._split_trackers) == 0
+
+
+class TestDuplicateDetection:
+    """Tests for the new reliable message deduplication."""
+
+    def test_duplicate_reliable_message_rejected(self):
+        layer = _make_layer()
+        now = time.monotonic()
+
+        frame = MessageFrame(
+            reliability=Reliability.RELIABLE,
+            data=b"hello",
+            reliable_message_number=0,
+        )
+        # Send same message twice in different datagrams
+        layer.on_datagram_received(encode_datagram(0, [frame]), now)
+        layer.on_datagram_received(encode_datagram(1, [frame]), now)
+
+        results = []
+        while True:
+            r = layer.poll_receive()
+            if r is None:
+                break
+            results.append(r[0])
+        # Should only deliver once
+        assert results == [b"hello"]
+
+    def test_duplicate_datagram_rejected(self):
+        layer = _make_layer()
+        now = time.monotonic()
+
+        frame = MessageFrame(
+            reliability=Reliability.RELIABLE,
+            data=b"world",
+            reliable_message_number=0,
+        )
+        raw = encode_datagram(0, [frame])
+        # Send same datagram twice
+        layer.on_datagram_received(raw, now)
+        layer.on_datagram_received(raw, now)
+
+        results = []
+        while True:
+            r = layer.poll_receive()
+            if r is None:
+                break
+            results.append(r[0])
+        assert results == [b"world"]
+
+    def test_out_of_order_reliable_messages_accepted(self):
+        layer = _make_layer()
+        now = time.monotonic()
+
+        # Receive reliable messages 2, 0, 1
+        for rmn, dg_seq in [(2, 0), (0, 1), (1, 2)]:
+            frame = MessageFrame(
+                reliability=Reliability.RELIABLE,
+                data=f"msg{rmn}".encode(),
+                reliable_message_number=rmn,
+            )
+            layer.on_datagram_received(encode_datagram(dg_seq, [frame]), now)
+
+        results = []
+        while True:
+            r = layer.poll_receive()
+            if r is None:
+                break
+            results.append(r[0])
+        assert len(results) == 3
+
+
+class TestSplitReliabilityUpgrade:
+    """Tests for automatic reliability upgrade of split packets."""
+
+    def test_unreliable_split_upgraded_to_reliable(self):
+        layer = _make_layer(mtu=600)
+        large_data = b"\x86" + bytes(range(256)) * 10
+        layer.send(large_data, reliability=Reliability.UNRELIABLE)
+        # All fragments should be RELIABLE (upgraded from UNRELIABLE)
+        for frame in layer._send_queue:
+            assert frame.reliability == Reliability.RELIABLE
+
+    def test_unreliable_sequenced_split_upgraded(self):
+        layer = _make_layer(mtu=600)
+        large_data = b"\x86" + bytes(range(256)) * 10
+        layer.send(large_data, reliability=Reliability.UNRELIABLE_SEQUENCED)
+        for frame in layer._send_queue:
+            assert frame.reliability == Reliability.RELIABLE_SEQUENCED
+
+
+class TestChannelPropagation:
+    """Tests that ordered/sequenced messages propagate ordering_channel."""
+
+    def test_sequenced_preserves_channel(self):
+        layer = _make_layer()
+        now = time.monotonic()
+
+        frame = MessageFrame(
+            reliability=Reliability.UNRELIABLE_SEQUENCED,
+            data=b"test",
+            sequencing_index=0,
+            ordering_index=0,
+            ordering_channel=5,
+        )
+        layer.on_datagram_received(encode_datagram(0, [frame]), now)
+
+        result = layer.poll_receive()
+        assert result is not None
+        _, channel = result
+        assert channel == 5
+
+    def test_ordered_preserves_channel(self):
+        layer = _make_layer()
+        now = time.monotonic()
+
+        frame = MessageFrame(
+            reliability=Reliability.RELIABLE_ORDERED,
+            data=b"test",
+            reliable_message_number=0,
+            ordering_index=0,
+            ordering_channel=3,
+        )
+        layer.on_datagram_received(encode_datagram(0, [frame]), now)
+
+        result = layer.poll_receive()
+        assert result is not None
+        _, channel = result
+        assert channel == 3
+
+
+class TestWraparound:
+    """Tests for 24-bit counter wraparound."""
+
+    def test_ordering_counter_wraps(self):
+        layer = _make_layer()
+        layer._next_ordering_index[0] = SEQ_NUM_MAX
+        layer.send(b"test", Reliability.RELIABLE_ORDERED, 0)
+        # After sending, the counter should have wrapped to 0
+        assert layer._next_ordering_index[0] == 0
+
+    def test_sequencing_counter_wraps(self):
+        layer = _make_layer()
+        layer._next_sequencing_index[0] = SEQ_NUM_MAX
+        layer.send(b"test", Reliability.UNRELIABLE_SEQUENCED, 0)
+        assert layer._next_sequencing_index[0] == 0

@@ -1,23 +1,12 @@
 """Core reliability layer: ACK/NAK, ordering, sequencing, split reassembly.
 
-This module implements the heart of the RakNet reliable-UDP protocol.  The
-:class:`ReliabilityLayer` manages:
-
-* **Send side** — queueing outgoing messages, auto-incrementing reliable /
-  ordering / sequencing counters, splitting messages that exceed the MTU,
-  and building datagrams that respect the congestion window.
-* **Receive side** — detecting gaps for NAK generation, building ACK range
-  lists, reassembling split packets, enforcing ordering per channel with a
-  heap, and discarding stale sequenced packets.
-* **Resend buffer** — tracking in-flight datagrams so they can be
-  retransmitted on NAK or RTO expiry.
-
-The layer is driven by a periodic ``update()`` call (typically every 10 ms)
-and by ``on_datagram_received()`` for inbound traffic.
+Faithful port of ReliabilityLayer.cpp with message-level resend tracking,
+duplicate detection, 24-bit wraparound, and MTU-limited ACK/NAK packets.
 """
 
 import heapq
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 
 from ._congestion import CongestionController, seq_greater_than
@@ -43,38 +32,93 @@ from ._wire import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Internal packet tracking
+# Constants
+# ---------------------------------------------------------------------------
+
+HALF_SEQ = (SEQ_NUM_MAX + 1) // 2
+
+# ---------------------------------------------------------------------------
+# Internal data structures
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class _InFlightDatagram:
-    """Metadata for a datagram that has been sent but not yet ACKed.
+class _InFlightMessage:
+    """Per-message resend tracking (replaces per-datagram tracking).
 
-    Attributes:
-        seq: Datagram sequence number.
-        send_time: Monotonic timestamp (seconds) when the datagram was sent.
-        frames: Message frames contained in this datagram.
-        byte_size: Total encoded byte size of the datagram.
-        times_sent: How many times this datagram has been (re)transmitted.
+    Each reliable message gets its own entry so that resends are message-level
+    rather than datagram-level, matching C++ ReliabilityLayer behaviour.
     """
+
+    reliable_message_number: int
+    frame: MessageFrame
+    next_action_time: float
+    retransmission_time: float
+    times_sent: int = 1
+    byte_size: int = 0
+
+
+@dataclass
+class _DatagramRecord:
+    """Maps a sent datagram seq to the reliable messages it contained."""
 
     seq: int
     send_time: float
-    frames: list[MessageFrame]
-    byte_size: int
-    times_sent: int = 1
+    reliable_message_numbers: list[int] = field(default_factory=list)
+    is_continuous_send: bool = False
+    byte_size: int = 0
+
+
+class _ReliableMessageWindow:
+    """Sliding window for reliable message number deduplication.
+
+    Ports C++ ``hasReceivedPacketQueue`` (``Queue<bool>``) from
+    ``ReliabilityLayer.cpp:941-994``.
+    """
+
+    __slots__ = ("_base", "_window")
+
+    def __init__(self) -> None:
+        self._base: int = 0
+        self._window: deque[bool] = deque()
+
+    def check_and_mark(self, reliable_num: int) -> bool:
+        """Return True if *reliable_num* is new, False if duplicate."""
+        hole_count = (reliable_num - self._base) & SEQ_NUM_MAX
+
+        # Behind the base (wrapped around) — duplicate
+        if hole_count >= HALF_SEQ:
+            return False
+
+        if hole_count == 0:
+            # Got exactly what we expected
+            if self._window:
+                self._window.popleft()
+            self._base = (self._base + 1) & SEQ_NUM_MAX
+            # Pop consecutive already-received entries
+            while self._window and self._window[0]:
+                self._window.popleft()
+                self._base = (self._base + 1) & SEQ_NUM_MAX
+            return True
+
+        if hole_count < len(self._window):
+            if self._window[hole_count]:
+                return False  # Duplicate
+            self._window[hole_count] = True
+            return True
+
+        # Extend the window to accommodate this message
+        while len(self._window) < hole_count:
+            self._window.append(False)
+        self._window.append(True)
+        return True
 
 
 class _ReceivedWindow:
     """Sliding window tracker for received datagram sequence numbers.
 
-    Replaces an unbounded ``set[int]`` with a fixed-size window. Packets
-    below ``_base`` are considered already received. Matches the C++
-    ``hasReceivedPacketQueue`` approach with ``DEFAULT_HAS_RECEIVED_PACKET_QUEUE_SIZE``.
-
-    Args:
-        size: Window size (number of sequence numbers tracked).
+    Packets below ``_base`` are considered already received.  Matches the C++
+    ``hasReceivedPacketQueue`` approach.
     """
 
     __slots__ = ("_size", "_base", "_bits")
@@ -85,33 +129,21 @@ class _ReceivedWindow:
         self._bits: set[int] = set()
 
     def __contains__(self, seq: int) -> bool:
-        """Return ``True`` if *seq* has been received."""
-        # Sequence numbers below the window base are considered received.
         offset = (seq - self._base) & SEQ_NUM_MAX
-        if offset >= (SEQ_NUM_MAX + 1) // 2:
-            # seq is behind _base (wrapped), consider received
+        if offset >= HALF_SEQ:
             return True
         if offset >= self._size:
-            # seq is ahead of the window — not yet received
             return False
         return seq in self._bits
 
     def add(self, seq: int) -> None:
-        """Mark *seq* as received, advancing the window if needed."""
         offset = (seq - self._base) & SEQ_NUM_MAX
-        if offset >= (SEQ_NUM_MAX + 1) // 2:
-            # seq is behind _base, already covered
+        if offset >= HALF_SEQ:
             return
-        # Advance window if seq is beyond current range
         if offset >= self._size:
             advance = offset - self._size + 1
             new_base = (self._base + advance) & SEQ_NUM_MAX
-            # Remove entries that fell out of the window
-            to_remove = []
-            for s in self._bits:
-                s_offset = (s - new_base) & SEQ_NUM_MAX
-                if s_offset >= (SEQ_NUM_MAX + 1) // 2:
-                    to_remove.append(s)
+            to_remove = [s for s in self._bits if ((s - new_base) & SEQ_NUM_MAX) >= HALF_SEQ]
             for s in to_remove:
                 self._bits.discard(s)
             self._base = new_base
@@ -120,16 +152,7 @@ class _ReceivedWindow:
 
 @dataclass
 class _SplitTracker:
-    """Tracks fragments of a single split message until reassembly.
-
-    Attributes:
-        total: Expected total number of fragments.
-        received: Mapping of fragment index → payload bytes.
-        reliability: Reliability mode of the original message.
-        ordering_index: Ordering index (if ordered).
-        ordering_channel: Ordering channel (if ordered).
-        last_update_time: Monotonic timestamp when this tracker was created.
-    """
+    """Tracks fragments of a single split message until reassembly."""
 
     total: int
     received: dict[int, bytes] = field(default_factory=dict)
@@ -144,11 +167,6 @@ class ReliabilityLayer:
 
     Manages ACK/NAK generation, message ordering, split-packet reassembly,
     and the resend buffer for a single peer connection.
-
-    Args:
-        mtu: Negotiated maximum transmission unit for this connection.
-        cc: The :class:`~aiorak._congestion.CongestionController` instance
-            shared with this connection.
     """
 
     def __init__(self, mtu: int, cc: CongestionController, *, timeout: float = DEFAULT_TIMEOUT) -> None:
@@ -162,10 +180,14 @@ class ReliabilityLayer:
         self._next_sequencing_index: list[int] = [0] * NUMBER_OF_ORDERED_STREAMS
         self._next_split_id: int = 0
 
-        # --- Send queue & resend buffer ---
+        # --- Send queue ---
         self._send_queue: list[MessageFrame] = []
-        self._resend_queue: list[MessageFrame] = []
-        self._in_flight: dict[int, _InFlightDatagram] = {}
+
+        # --- Message-level resend buffer (keyed by reliable_message_number) ---
+        self._resend_buffer: dict[int, _InFlightMessage] = {}
+
+        # --- Datagram history (datagram seq -> record) ---
+        self._datagram_history: dict[int, _DatagramRecord] = {}
         self._unacked_bytes: int = 0
 
         # --- Receive-side state ---
@@ -173,11 +195,14 @@ class ReliabilityLayer:
         self._nak_ranges: list[tuple[int, int]] = []
         self._received_datagrams: _ReceivedWindow = _ReceivedWindow()
 
+        # Reliable message deduplication
+        self._reliable_message_window: _ReliableMessageWindow = _ReliableMessageWindow()
+
         # Ordering heaps per channel: list of (ordering_index, data_bytes)
         self._ordering_heaps: list[list[tuple[int, bytes]]] = [[] for _ in range(NUMBER_OF_ORDERED_STREAMS)]
         self._expected_ordering_index: list[int] = [0] * NUMBER_OF_ORDERED_STREAMS
 
-        # Sequencing: highest seen index per channel
+        # Sequencing: highest seen index per channel (-1 = never seen)
         self._highest_sequenced: list[int] = [-1] * NUMBER_OF_ORDERED_STREAMS
 
         # Split reassembly
@@ -189,7 +214,7 @@ class ReliabilityLayer:
     @property
     def has_pending_data(self) -> bool:
         """True if there are frames queued, in-flight, or awaiting resend."""
-        return bool(self._send_queue or self._resend_queue or self._in_flight)
+        return bool(self._send_queue or self._resend_buffer or self._datagram_history)
 
     # ------------------------------------------------------------------
     # Public send API
@@ -204,15 +229,8 @@ class ReliabilityLayer:
         """Enqueue a message for transmission.
 
         Large messages are automatically split into fragments that fit within
-        the negotiated MTU.
-
-        Args:
-            data: Raw payload bytes.
-            reliability: Delivery guarantee for this message.
-            ordering_channel: Ordering channel (0–31) for ordered/sequenced modes.
-
-        Raises:
-            ValueError: If *ordering_channel* is not in ``[0, NUMBER_OF_ORDERED_STREAMS)``.
+        the negotiated MTU.  Split packets are upgraded to reliable delivery
+        matching C++ ``ReliabilityLayer.cpp:1608-1621``.
         """
         if not (0 <= ordering_channel < NUMBER_OF_ORDERED_STREAMS):
             raise ValueError(f"ordering_channel must be in [0, {NUMBER_OF_ORDERED_STREAMS}), got {ordering_channel}")
@@ -222,7 +240,13 @@ class ReliabilityLayer:
             frame = self._build_frame(data, reliability, ordering_channel)
             self._send_queue.append(frame)
         else:
-            # Split into fragments
+            # Split reliability upgrade (C++ ReliabilityLayer.cpp:1608-1621)
+            if reliability == Reliability.UNRELIABLE:
+                reliability = Reliability.RELIABLE
+            elif reliability == Reliability.UNRELIABLE_WITH_ACK_RECEIPT:
+                reliability = Reliability.RELIABLE_WITH_ACK_RECEIPT
+            elif reliability == Reliability.UNRELIABLE_SEQUENCED:
+                reliability = Reliability.RELIABLE_SEQUENCED
             self._split_and_queue(data, reliability, ordering_channel, max_payload)
 
     # ------------------------------------------------------------------
@@ -230,15 +254,7 @@ class ReliabilityLayer:
     # ------------------------------------------------------------------
 
     def on_datagram_received(self, raw: bytes, now: float) -> None:
-        """Process a raw UDP datagram from the remote peer.
-
-        Handles ACK, NAK, and data datagrams.  Reassembled / ordered
-        messages are placed on the internal receive queue.
-
-        Args:
-            raw: Raw datagram bytes (the full UDP payload).
-            now: Current monotonic time in seconds.
-        """
+        """Process a raw UDP datagram from the remote peer."""
         try:
             header, body = decode_datagram(raw)
         except ValueError:
@@ -253,11 +269,7 @@ class ReliabilityLayer:
             self._handle_data(header, body, now)  # type: ignore[arg-type]
 
     def poll_receive(self) -> tuple[bytes, int] | None:
-        """Pop the next completed message from the receive queue.
-
-        Returns:
-            ``(data, channel)`` tuple, or ``None`` if the queue is empty.
-        """
+        """Pop the next completed message from the receive queue."""
         if self._receive_queue:
             return self._receive_queue.pop(0)
         return None
@@ -267,80 +279,85 @@ class ReliabilityLayer:
     # ------------------------------------------------------------------
 
     def update(self, now: float) -> list[bytes]:
-        """Run a periodic update tick and return datagrams to send.
-
-        This should be called every ~10 ms.  It:
-
-        1. Flushes pending ACKs/NAKs.
-        2. Checks for RTO-expired in-flight datagrams and re-queues them.
-        3. Builds new data datagrams from the send queue, respecting the
-           congestion window.
-
-        Args:
-            now: Current monotonic time in seconds.
-
-        Returns:
-            A list of raw datagram bytes to transmit over UDP.
-        """
+        """Run a periodic update tick and return datagrams to send."""
         outgoing: list[bytes] = []
 
-        # 1. ACKs
+        # 1. ACKs (MTU-limited)
         if self._ack_ranges and self._cc.should_send_acks(now):
-            outgoing.append(encode_ack(self._ack_ranges))
+            outgoing.extend(self._build_ack_packets(self._ack_ranges))
             self._ack_ranges.clear()
             self._cc.on_send_ack()
 
-        # 2. NAKs
+        # 2. NAKs (MTU-limited)
         if self._nak_ranges:
-            outgoing.append(encode_nak(self._nak_ranges))
+            outgoing.extend(self._build_nak_packets(self._nak_ranges))
             self._nak_ranges.clear()
 
-        # 3. RTO resends
+        # 3. Message-level RTO resends
         rto = self._cc.get_rto()
-        expired_seqs: list[int] = []
-        for seq, inflight in self._in_flight.items():
-            if now - inflight.send_time >= rto:
-                expired_seqs.append(seq)
+        resend_frames: list[MessageFrame] = []
+        for msg in self._resend_buffer.values():
+            if now >= msg.next_action_time:
+                resend_frames.append(msg.frame)
 
-        for seq in expired_seqs:
-            inflight = self._in_flight.pop(seq)
-            self._unacked_bytes -= inflight.byte_size
+        if resend_frames:
             self._cc.on_resend()
-            logger.debug("RTO resend for datagram seq=%d (sent %.3fs ago)", seq, now - inflight.send_time)
-            # Re-queue frames for retransmission
-            self._resend_queue.extend(inflight.frames)
 
         # 4. Evict stale split trackers
         stale = [k for k, t in self._split_trackers.items() if now - t.last_update_time > self._timeout]
         for k in stale:
             del self._split_trackers[k]
 
-        # 5. Build data datagrams from resend + send queues
-        combined = self._resend_queue + self._send_queue
-        self._resend_queue.clear()
-        self._send_queue.clear()
+        # 5. Evict very old datagram history entries
+        stale_dg = [seq for seq, rec in self._datagram_history.items() if now - rec.send_time > self._timeout]
+        for seq in stale_dg:
+            rec = self._datagram_history.pop(seq)
+            self._unacked_bytes -= rec.byte_size
 
-        # Datagram overhead: 1 byte header bits + 3 bytes seq num = ~4 bytes
+        # 6. Build datagrams
         datagram_overhead = 4
         max_datagram_payload = self._mtu - UDP_HEADER_SIZE - datagram_overhead
 
+        # 6a. Pack resend frames (bypass cwnd — separate retransmission bandwidth)
+        if resend_frames:
+            outgoing.extend(self._pack_datagrams(resend_frames, max_datagram_payload, now, rto, is_resend=True))
+
+        # 6b. Pack new send frames (cwnd-limited)
+        if self._send_queue:
+            new_frames = self._send_queue[:]
+            self._send_queue.clear()
+            outgoing.extend(self._pack_datagrams(new_frames, max_datagram_payload, now, rto, is_resend=False))
+
+        return outgoing
+
+    def _pack_datagrams(
+        self,
+        frames: list[MessageFrame],
+        max_payload: int,
+        now: float,
+        rto: float,
+        *,
+        is_resend: bool,
+    ) -> list[bytes]:
+        """Pack frames into datagrams with late reliable number assignment."""
+        outgoing: list[bytes] = []
         idx = 0
         sent_at_least_one = False
-        while idx < len(combined):
-            budget = self._cc.transmission_bandwidth(self._unacked_bytes, len(combined) > 1)
-            if budget <= 0 and sent_at_least_one:
-                # Re-queue remaining frames
-                self._send_queue = combined[idx:] + self._send_queue
-                break
+
+        while idx < len(frames):
+            if not is_resend:
+                budget = self._cc.transmission_bandwidth(self._unacked_bytes, len(frames) - idx > 1)
+                if budget <= 0 and sent_at_least_one:
+                    self._send_queue = frames[idx:] + self._send_queue
+                    break
 
             frames_for_dg: list[MessageFrame] = []
             dg_size = 0
 
-            while idx < len(combined) and dg_size < max_datagram_payload:
-                frame = combined[idx]
-                # Estimate frame wire size
+            while idx < len(frames) and dg_size < max_payload:
+                frame = frames[idx]
                 frame_size = self._estimate_frame_size(frame)
-                if dg_size + frame_size > max_datagram_payload and frames_for_dg:
+                if dg_size + frame_size > max_payload and frames_for_dg:
                     break
                 frames_for_dg.append(frame)
                 dg_size += frame_size
@@ -349,19 +366,49 @@ class ReliabilityLayer:
             if not frames_for_dg:
                 break
 
+            # Late reliable message number assignment
+            reliable_nums: list[int] = []
+            for frame in frames_for_dg:
+                if frame.reliability.is_reliable and frame.reliable_message_number == -1:
+                    frame.reliable_message_number = self._next_reliable_num
+                    self._next_reliable_num = (self._next_reliable_num + 1) & SEQ_NUM_MAX
+                if frame.reliability.is_reliable:
+                    reliable_nums.append(frame.reliable_message_number)
+
+            is_continuous = (len(frames) - idx > 0) or bool(self._send_queue)
             seq = self._cc.get_and_increment_seq()
-            raw = encode_datagram(
-                seq,
-                frames_for_dg,
-                is_continuous_send=len(combined) - idx > 0,
-            )
-            self._in_flight[seq] = _InFlightDatagram(
+            raw = encode_datagram(seq, frames_for_dg, is_continuous_send=is_continuous)
+
+            # Record datagram history
+            self._datagram_history[seq] = _DatagramRecord(
                 seq=seq,
                 send_time=now,
-                frames=frames_for_dg,
+                reliable_message_numbers=reliable_nums,
+                is_continuous_send=is_continuous,
                 byte_size=len(raw),
             )
             self._unacked_bytes += len(raw)
+
+            # Update resend buffer for reliable messages
+            for frame in frames_for_dg:
+                if frame.reliability.is_reliable:
+                    rmn = frame.reliable_message_number
+                    existing = self._resend_buffer.get(rmn)
+                    if existing is not None:
+                        # Resend — update tracking with exponential backoff
+                        existing.next_action_time = now + rto * (2 ** min(existing.times_sent, 5))
+                        existing.retransmission_time = rto
+                        existing.times_sent += 1
+                    else:
+                        # New message
+                        self._resend_buffer[rmn] = _InFlightMessage(
+                            reliable_message_number=rmn,
+                            frame=frame,
+                            next_action_time=now + rto,
+                            retransmission_time=rto,
+                            byte_size=self._estimate_frame_size(frame),
+                        )
+
             outgoing.append(raw)
             sent_at_least_one = True
 
@@ -374,39 +421,42 @@ class ReliabilityLayer:
     def _handle_ack(self, ranges: list[tuple[int, int]], now: float) -> None:
         """Process acknowledged datagram sequence numbers.
 
-        Args:
-            ranges: List of ``(min, max)`` acknowledged sequence number ranges.
-            now: Current monotonic time.
+        Uses ``_datagram_history`` to find which reliable messages were in each
+        datagram, and passes the stored ``is_continuous_send`` to the congestion
+        controller instead of reading stale state.
         """
         for lo, hi in ranges:
             count = ((hi - lo) & SEQ_NUM_MAX) + 1
             count = min(count, DATAGRAM_MESSAGE_ID_ARRAY_LENGTH)
             seq = lo
             for _ in range(count):
-                inflight = self._in_flight.pop(seq, None)
-                if inflight is not None:
-                    rtt = now - inflight.send_time
-                    self._unacked_bytes -= inflight.byte_size
-                    self._cc.on_ack(rtt, seq, self._cc._is_continuous_send)
+                rec = self._datagram_history.pop(seq, None)
+                if rec is not None:
+                    rtt = now - rec.send_time
+                    self._unacked_bytes -= rec.byte_size
+                    self._cc.on_ack(rtt, seq, rec.is_continuous_send)
+                    # Remove acknowledged messages from resend buffer
+                    for rmn in rec.reliable_message_numbers:
+                        self._resend_buffer.pop(rmn, None)
                 seq = (seq + 1) & SEQ_NUM_MAX
 
     def _handle_nak(self, ranges: list[tuple[int, int]]) -> None:
-        """Process negative acknowledgements — requeue affected datagrams.
-
-        Args:
-            ranges: List of ``(min, max)`` missing sequence number ranges.
-        """
+        """Process NAKs — mark affected messages for immediate resend."""
         for lo, hi in ranges:
             count = ((hi - lo) & SEQ_NUM_MAX) + 1
             count = min(count, DATAGRAM_MESSAGE_ID_ARRAY_LENGTH)
             seq = lo
             for _ in range(count):
-                inflight = self._in_flight.pop(seq, None)
-                if inflight is not None:
-                    self._unacked_bytes -= inflight.byte_size
+                rec = self._datagram_history.pop(seq, None)
+                if rec is not None:
+                    self._unacked_bytes -= rec.byte_size
                     self._cc.on_nak()
                     self._cc.on_resend()
-                    self._resend_queue.extend(inflight.frames)
+                    # Mark messages for immediate resend
+                    for rmn in rec.reliable_message_numbers:
+                        msg = self._resend_buffer.get(rmn)
+                        if msg is not None:
+                            msg.next_action_time = 0.0
                 seq = (seq + 1) & SEQ_NUM_MAX
 
     # ------------------------------------------------------------------
@@ -421,13 +471,7 @@ class ReliabilityLayer:
     ) -> None:
         """Process an incoming data datagram.
 
-        Generates ACK entries and NAK ranges for gaps, then delivers each
-        contained message frame.
-
-        Args:
-            header: Parsed datagram header.
-            frames: List of decoded message frames.
-            now: Current monotonic time.
+        Performs datagram-level deduplication before processing frames.
         """
         seq = header.datagram_number
         skipped = self._cc.on_got_packet(seq, now)
@@ -443,6 +487,10 @@ class ReliabilityLayer:
                 if missed not in self._received_datagrams:
                     self._add_to_ranges(self._nak_ranges, missed)
 
+        # Datagram-level dedup: ACK it but skip frame processing
+        if seq in self._received_datagrams:
+            return
+
         self._received_datagrams.add(seq)
 
         # Process each message frame
@@ -452,19 +500,19 @@ class ReliabilityLayer:
     def _handle_frame(self, frame: MessageFrame, now: float) -> None:
         """Process a single decoded message frame.
 
-        Handles split reassembly, then routes complete messages through
-        ordering/sequencing logic.
-
-        Args:
-            frame: The decoded message frame.
-            now: Current monotonic time in seconds.
+        Performs reliable message deduplication, split reassembly, then routes
+        through ordering/sequencing logic.
         """
+        # Reliable message number deduplication (C++ hasReceivedPacketQueue)
+        if frame.reliability.is_reliable:
+            if not self._reliable_message_window.check_and_mark(frame.reliable_message_number):
+                return  # Duplicate
+
         # Split reassembly
         if frame.split_packet_count > 0:
             data = self._reassemble_split(frame, now)
             if data is None:
-                return  # Not all fragments received yet
-            # Use the first fragment's metadata for the reassembled message
+                return
             frame = MessageFrame(
                 reliability=frame.reliability,
                 data=data,
@@ -476,24 +524,26 @@ class ReliabilityLayer:
             )
 
         rel = frame.reliability
+        ch = frame.ordering_channel
 
-        if not rel.is_ordered:
-            self._receive_queue.append((frame.data, 0))
-
-        elif rel.is_sequenced:
-            ch = frame.ordering_channel
-            if frame.sequencing_index > self._highest_sequenced[ch]:
+        if rel.is_sequenced:
+            # Wraparound-aware sequenced comparison (C++ IsOlderOrderedPacket)
+            if self._highest_sequenced[ch] == -1 or seq_greater_than(
+                frame.sequencing_index & SEQ_NUM_MAX,
+                self._highest_sequenced[ch] & SEQ_NUM_MAX,
+            ):
                 self._highest_sequenced[ch] = frame.sequencing_index
                 self._receive_queue.append((frame.data, ch))
             # else: stale packet, drop silently
 
-        else:  # ordered (non-sequenced)
-            ch = frame.ordering_channel
+        elif rel == Reliability.RELIABLE_ORDERED:
+            # Only RELIABLE_ORDERED enters the ordering system.
+            # RELIABLE_ORDERED_WITH_ACK_RECEIPT bypasses (C++ ReliabilityLayer.cpp:1248-1251)
+            # but on the wire it's decoded as RELIABLE_ORDERED anyway.
             if frame.ordering_index == self._expected_ordering_index[ch]:
                 self._receive_queue.append((frame.data, ch))
-                self._expected_ordering_index[ch] += 1
-                self._highest_sequenced[ch] = -1  # Reset per C++ behavior
-                # Flush any buffered messages that are now in order
+                self._expected_ordering_index[ch] = (self._expected_ordering_index[ch] + 1) & SEQ_NUM_MAX
+                self._highest_sequenced[ch] = -1
                 self._flush_ordering_heap(ch)
             elif seq_greater_than(
                 frame.ordering_index & SEQ_NUM_MAX,
@@ -505,44 +555,31 @@ class ReliabilityLayer:
                 )
             # else: stale ordering index, silently drop
 
-    def _flush_ordering_heap(self, channel: int) -> None:
-        """Deliver buffered ordered messages that are now sequential.
+        else:
+            # UNRELIABLE, RELIABLE, *_WITH_ACK_RECEIPT — deliver directly
+            # Use frame.ordering_channel instead of hardcoded 0
+            self._receive_queue.append((frame.data, ch))
 
-        Args:
-            channel: The ordering channel to flush.
-        """
+    def _flush_ordering_heap(self, channel: int) -> None:
+        """Deliver buffered ordered messages that are now sequential."""
         heap = self._ordering_heaps[channel]
         while heap and heap[0][0] == self._expected_ordering_index[channel]:
             _, data = heapq.heappop(heap)
             self._receive_queue.append((data, channel))
-            self._expected_ordering_index[channel] += 1
-            self._highest_sequenced[channel] = -1  # Reset per C++ behavior
+            self._expected_ordering_index[channel] = (self._expected_ordering_index[channel] + 1) & SEQ_NUM_MAX
+            self._highest_sequenced[channel] = -1
 
     # ------------------------------------------------------------------
     # Split packet reassembly
     # ------------------------------------------------------------------
 
     def _reassemble_split(self, frame: MessageFrame, now: float) -> bytes | None:
-        """Accumulate a split fragment and return the reassembled payload when complete.
-
-        Evicts stale trackers (older than the connection timeout) before
-        creating new ones, matching C++ ``SplitPacketChannel::lastUpdateTime``
-        timeout behavior.
-
-        Args:
-            frame: A message frame with ``split_packet_count > 0``.
-            now: Current monotonic time in seconds.
-
-        Returns:
-            The full reassembled payload bytes, or ``None`` if not all
-            fragments have arrived yet.
-        """
+        """Accumulate a split fragment and return the reassembled payload when complete."""
         sid = frame.split_packet_id
         if frame.split_packet_count > MAX_SPLIT_PACKET_COUNT:
             return None
         tracker = self._split_trackers.get(sid)
         if tracker is None:
-            # Evict stale trackers before creating a new one
             stale = [k for k, t in self._split_trackers.items() if now - t.last_update_time > self._timeout]
             for k in stale:
                 logger.warning(
@@ -565,7 +602,6 @@ class ReliabilityLayer:
         if len(tracker.received) < tracker.total:
             return None
 
-        # All fragments received — reassemble in order
         logger.debug("Split reassembly complete: id=%d, %d fragments", sid, tracker.total)
         parts = [tracker.received[i] for i in range(tracker.total)]
         del self._split_trackers[sid]
@@ -580,33 +616,18 @@ class ReliabilityLayer:
         reliability: Reliability,
         channel: int,
     ) -> tuple[int, int]:
-        """Consume and return ordering/sequencing counters for a message.
-
-        This is the single source of truth for counter advancement, called
-        by both :meth:`_build_frame` (single messages) and
-        :meth:`_split_and_queue` (split fragments that share one set of
-        counters).
-
-        Args:
-            reliability: Delivery guarantee.
-            channel: Ordering channel (0–31).
-
-        Returns:
-            ``(ordering_index, sequencing_index)`` to stamp on the frame(s).
-        """
+        """Consume and return ordering/sequencing counters with 24-bit wraparound."""
         ordering_index = 0
         sequencing_index = 0
 
         if reliability.is_sequenced:
             sequencing_index = self._next_sequencing_index[channel]
-            self._next_sequencing_index[channel] += 1
+            self._next_sequencing_index[channel] = (self._next_sequencing_index[channel] + 1) & SEQ_NUM_MAX
 
         if reliability.is_ordered:
             ordering_index = self._next_ordering_index[channel]
             if not reliability.is_sequenced:
-                # Ordered (non-sequenced) modes consume the ordering index
-                # and reset the sequencing counter per C++ behavior.
-                self._next_ordering_index[channel] += 1
+                self._next_ordering_index[channel] = (self._next_ordering_index[channel] + 1) & SEQ_NUM_MAX
                 self._next_sequencing_index[channel] = 0
 
         return ordering_index, sequencing_index
@@ -617,16 +638,7 @@ class ReliabilityLayer:
         reliability: Reliability,
         channel: int,
     ) -> MessageFrame:
-        """Build a single :class:`MessageFrame` with appropriate counters.
-
-        Args:
-            data: Raw payload bytes.
-            reliability: Delivery guarantee.
-            channel: Ordering channel (0–31).
-
-        Returns:
-            A fully populated :class:`MessageFrame`.
-        """
+        """Build a single MessageFrame with late reliable number assignment."""
         frame = MessageFrame(
             reliability=reliability,
             data=data,
@@ -634,14 +646,11 @@ class ReliabilityLayer:
             ordering_channel=channel,
         )
 
+        # Late assignment: set to -1, assigned when packing into datagram
         if reliability.is_reliable:
-            frame.reliable_message_number = self._next_reliable_num
-            self._next_reliable_num += 1
+            frame.reliable_message_number = -1
 
-        ordering_index, sequencing_index = self._advance_ordering_counters(
-            reliability,
-            channel,
-        )
+        ordering_index, sequencing_index = self._advance_ordering_counters(reliability, channel)
         frame.ordering_index = ordering_index
         frame.sequencing_index = sequencing_index
 
@@ -656,11 +665,7 @@ class ReliabilityLayer:
     ) -> None:
         """Split a large message into MTU-sized fragments and enqueue them.
 
-        Args:
-            data: Full payload bytes.
-            reliability: Delivery guarantee for all fragments.
-            channel: Ordering channel.
-            max_payload: Maximum payload bytes per fragment.
+        Reliability has already been upgraded by the caller if needed.
         """
         split_id = self._next_split_id & 0xFFFF
         self._next_split_id += 1
@@ -672,17 +677,14 @@ class ReliabilityLayer:
             offset += max_payload
 
         total = len(fragments)
-        ordering_index, sequencing_index = self._advance_ordering_counters(
-            reliability,
-            channel,
-        )
+        ordering_index, sequencing_index = self._advance_ordering_counters(reliability, channel)
 
         for i, chunk in enumerate(fragments):
             frame = MessageFrame(
                 reliability=reliability,
                 data=chunk,
                 data_bit_length=len(chunk) * 8,
-                reliable_message_number=self._next_reliable_num if reliability.is_reliable else 0,
+                reliable_message_number=-1 if reliability.is_reliable else 0,
                 sequencing_index=sequencing_index,
                 ordering_index=ordering_index,
                 ordering_channel=channel,
@@ -690,45 +692,63 @@ class ReliabilityLayer:
                 split_packet_id=split_id,
                 split_packet_index=i,
             )
-            if reliability.is_reliable:
-                self._next_reliable_num += 1
             self._send_queue.append(frame)
+
+    # ------------------------------------------------------------------
+    # MTU-limited ACK/NAK packets
+    # ------------------------------------------------------------------
+
+    def _build_ack_packets(self, ranges: list[tuple[int, int]]) -> list[bytes]:
+        """Build ACK packets, splitting across multiple if exceeding MTU."""
+        return self._build_range_packets(ranges, is_ack=True)
+
+    def _build_nak_packets(self, ranges: list[tuple[int, int]]) -> list[bytes]:
+        """Build NAK packets, splitting across multiple if exceeding MTU."""
+        return self._build_range_packets(ranges, is_ack=False)
+
+    def _build_range_packets(self, ranges: list[tuple[int, int]], *, is_ack: bool) -> list[bytes]:
+        """Split a range list into MTU-sized ACK or NAK packets."""
+        max_size = self._mtu - UDP_HEADER_SIZE
+        # Header overhead: 1 byte (flags) + 2 bytes (range count) = 3 bytes
+        header_overhead = 3
+
+        packets: list[bytes] = []
+        current_ranges: list[tuple[int, int]] = []
+        current_size = header_overhead
+
+        for lo, hi in ranges:
+            range_size = 4 if lo == hi else 7
+            if current_size + range_size > max_size and current_ranges:
+                if is_ack:
+                    packets.append(encode_ack(current_ranges))
+                else:
+                    packets.append(encode_nak(current_ranges))
+                current_ranges = []
+                current_size = header_overhead
+
+            current_ranges.append((lo, hi))
+            current_size += range_size
+
+        if current_ranges:
+            if is_ack:
+                packets.append(encode_ack(current_ranges))
+            else:
+                packets.append(encode_nak(current_ranges))
+
+        return packets
 
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
 
     def _max_payload_per_frame(self, reliability: Reliability) -> int:
-        """Calculate the maximum user-data bytes per message frame.
-
-        Subtracts the datagram header, frame header, and split-packet
-        overhead from the MTU.
-
-        Args:
-            reliability: Delivery mode (affects header size).
-
-        Returns:
-            Maximum payload bytes that fit in a single frame.
-        """
-        # Datagram overhead: ~4 bytes (header bits + seq number)
-        # Frame header: 1 byte (rel+split) + 2 (data bit len) + 3 (reliable num)
-        #   + 3 (seq index) + 3 (order index) + 1 (channel) = ~13 bytes worst case
-        # Split fields: 4 + 2 + 4 = 10 bytes
+        """Calculate the maximum user-data bytes per message frame."""
         overhead = UDP_HEADER_SIZE + 4 + 13 + 10
         return max(self._mtu - overhead, 64)
 
     @staticmethod
     def _add_to_ranges(ranges: list[tuple[int, int]], value: int) -> None:
-        """Insert *value* into a sorted range list, merging adjacent entries.
-
-        This maintains the compact representation used for ACK/NAK encoding.
-
-        Args:
-            ranges: The range list to modify in-place.
-            value: The sequence number to insert.
-        """
-        # Simple approach: append and sort/merge
-        # For a production system a more efficient structure would be used
+        """Insert *value* into a sorted range list, merging adjacent entries."""
         ranges.append((value, value))
         ranges.sort()
         merged: list[tuple[int, int]] = []
@@ -741,23 +761,14 @@ class ReliabilityLayer:
         ranges.extend(merged)
 
     def _estimate_frame_size(self, frame: MessageFrame) -> int:
-        """Estimate the wire size of a message frame in bytes.
-
-        Args:
-            frame: The frame to estimate.
-
-        Returns:
-            Approximate encoded byte count.
-        """
-        # 1 byte header (reliability + split bit + alignment)
-        # 2 bytes data bit length
+        """Estimate the wire size of a message frame in bytes."""
         size = 3 + len(frame.data)
         if frame.reliability.is_reliable:
-            size += 3  # reliable message number
+            size += 3
         if frame.reliability.is_sequenced:
-            size += 3  # sequencing index
+            size += 3
         if frame.reliability.is_ordered:
-            size += 4  # ordering index + channel
+            size += 4
         if frame.split_packet_count > 0:
-            size += 10  # split fields
+            size += 10
         return size
