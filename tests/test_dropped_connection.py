@@ -1,4 +1,9 @@
-"""Port of DroppedConnectionTest.cpp — verify that dropped connections are detected."""
+"""Port of DroppedConnectionConvertTest.cpp — verify that dropped connections are detected.
+
+C++ test: RakNet/Samples/Tests/DroppedConnectionConvertTest.cpp
+Uses CloseConnection(target, false) to silently drop connections, then
+verifies the remote side detects the loss via timeout.
+"""
 
 import asyncio
 import random
@@ -18,20 +23,20 @@ async def wait_for_peers(server, count, timeout=5.0):
     await asyncio.wait_for(_wait(), timeout=timeout)
 
 
-def force_close_transport(target):
-    """Close the underlying UDP transport without graceful disconnect."""
-    target._socket._transport.close()
-
-
 pytestmark = pytest.mark.asyncio
 
 
 async def test_server_detects_client_gone(server_factory, client_factory):
-    """Connect 5 clients, force-close 3, and verify the server detects the drops."""
+    """Connect 5 clients, silently close 3, and verify the server detects the drops.
+
+    Mirrors C++ test case 0: CloseConnection(serverID, false, 0) on the client
+    side — no notification is sent, so the server must detect the loss via timeout.
+    """
     num_clients = 5
     num_to_drop = 3
 
     server = await server_factory(max_connections=num_clients)
+    server.timeout = 2.0
     addr = server.local_address
 
     clients = []
@@ -41,50 +46,56 @@ async def test_server_detects_client_gone(server_factory, client_factory):
     await wait_for_peers(server, num_clients)
     assert len(server._peers) == num_clients
 
-    # Force-close the first 3 clients (no graceful disconnect)
+    # Silently close the first 3 clients (no notification — matches C++
+    # CloseConnection(serverID, false, 0) from RakPeer.cpp:1650)
     for i in range(num_to_drop):
-        force_close_transport(clients[i])
+        await clients[i].close(notify=False)
 
-    # Wait for the server to detect the dropped connections.
-    # Detection is timeout-based, so allow generous time (~15s).
+    # Wait for the server to detect the dropped connections via timeout.
     expected = num_clients - num_to_drop
 
     async def _wait_for_drop():
         while len(server._peers) > expected:
             await asyncio.sleep(0.2)
 
-    await asyncio.wait_for(_wait_for_drop(), timeout=20.0)
+    await asyncio.wait_for(_wait_for_drop(), timeout=10.0)
     assert len(server._peers) == expected
 
 
 async def test_client_detects_server_gone(server_factory, client_factory):
-    """Connect a client, force-close the server, and verify the client detects it."""
+    """Connect a client, silently close the server, and verify the client detects it.
+
+    Mirrors the server-side equivalent of CloseConnection with no notification.
+    """
     server = await server_factory()
     addr = server.local_address
     client = await client_factory(addr)
+    client.timeout = 2.0
 
     await wait_for_peers(server, 1)
 
-    # Force-close the server transport so the client gets no graceful disconnect
-    force_close_transport(server)
+    # Silently shut down the server (no disconnect notification to clients)
+    await server.close(notify=False)
 
-    # The client's async iterator should eventually end when it detects
-    # the server is gone.
+    # The client's async iterator should end when it detects the server is gone.
     async def _drain_client():
         async for _data in client:
-            pass  # pragma: no cover — we don't expect data, just disconnection
+            pass  # pragma: no cover
 
-    await asyncio.wait_for(_drain_client(), timeout=20.0)
+    await asyncio.wait_for(_drain_client(), timeout=10.0)
     assert not client.is_connected
 
 
 async def test_random_disconnect_reconnect(server_factory, client_factory):
-    """Randomly disconnect and reconnect clients for 5 seconds without crashing."""
+    """Randomly disconnect and reconnect clients for 5 seconds without crashing.
+
+    Mirrors C++ test case 2: randomly calls CloseConnection with either
+    sendDisconnectionNotification=true or false, and reconnects.
+    """
     num_slots = 5
     server = await server_factory(max_connections=num_slots + 2)
     addr = server.local_address
 
-    # Initial connections
     clients: list[aiorak.Client | None] = []
     for _ in range(num_slots):
         cli = await client_factory(addr)
@@ -99,11 +110,12 @@ async def test_random_disconnect_reconnect(server_factory, client_factory):
         cli = clients[idx]
 
         if cli is not None and cli.is_connected:
-            # Randomly either gracefully close or force-close
+            # Randomly either gracefully close or silently drop
+            # (C++ test case 2: randomTest2 ? CloseConnection(false) : CloseConnection(true))
             if random.random() < 0.5:
-                await cli.close()
+                await cli.close(notify=True)
             else:
-                force_close_transport(cli)
+                await cli.close(notify=False)
             clients[idx] = None
         elif cli is None:
             # Reconnect
@@ -115,12 +127,10 @@ async def test_random_disconnect_reconnect(server_factory, client_factory):
 
         await asyncio.sleep(random.uniform(0.05, 0.3))
 
-    # Cleanup: close any remaining connected clients
+    # Cleanup
     for cli in clients:
         if cli is not None:
             try:
                 await cli.close()
             except Exception:
                 pass
-
-    # If we got here without an unhandled exception, the test passes.

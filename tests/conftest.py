@@ -25,9 +25,10 @@ async def server_factory():
         handler: Callable[[Connection], Awaitable[None]] | None = None,
         address: tuple[str, int] = ("127.0.0.1", 0),
         max_connections: int = 64,
+        **kwargs,
     ) -> Server:
         h = handler if handler is not None else _default_handler
-        srv = await aiorak.create_server(address, h, max_connections=max_connections)
+        srv = await aiorak.create_server(address, h, max_connections=max_connections, **kwargs)
         servers.append(srv)
         return srv
 

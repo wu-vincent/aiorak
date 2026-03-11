@@ -30,7 +30,7 @@ class Client:
     """RakNet-compatible UDP client.
 
     Manages a single server connection and provides an async interface for
-    sending and receiving messages.
+    sending and receiving messages.  Always create via :func:`aiorak.connect`.
 
     Args:
         server_address: ``(host, port)`` of the server to connect to.
@@ -60,9 +60,10 @@ class Client:
         self._mtu_discovery_sizes = mtu_discovery_sizes if mtu_discovery_sizes is not None else (max_mtu, 1200, 576)
         self._num_internal_ids = num_internal_ids
 
-        self._connection: Connection | None = None
-        self._socket: UDPSocket | None = None
-        self._update_task: asyncio.Task[None] | None = None
+        # Set by connect(); always non-None after successful connect().
+        self._connection: Connection
+        self._socket: UDPSocket
+        self._update_task: asyncio.Task[None]
         self._connected_event: asyncio.Event = asyncio.Event()
         self._connect_error: OSError | None = None
         self._closed = False
@@ -98,6 +99,7 @@ class Client:
             guid=self._guid,
             is_server=False,
             mtu=self._max_mtu,
+            timeout=timeout,
             protocol_version=self._protocol_version,
             max_mtu=self._max_mtu,
             min_mtu=self._min_mtu,
@@ -118,56 +120,67 @@ class Client:
             raise self._connect_error
         logger.debug("Connected to %s", self._server_address)
 
-    async def close(self) -> None:
-        """Gracefully disconnect from the server and release resources."""
+    async def close(self, *, notify: bool = True) -> None:
+        """Disconnect from the server and release resources.
+
+        Args:
+            notify: If ``True`` (default), send ``ID_DISCONNECTION_NOTIFICATION``
+                so the server detects the disconnect immediately.  If ``False``,
+                silently drop — the server will detect it via timeout.
+        """
         if self._closed:
             return
         self._closed = True
 
-        if self._connection is not None:
+        if notify:
             self._connection.disconnect()
 
         # Let the update loop flush the disconnect notification.
-        if self._connection is not None and self._update_task is not None:
+        if notify:
             try:
                 await asyncio.wait_for(self._drain(), timeout=1.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
 
-        if self._update_task is not None:
-            self._update_task.cancel()
-            try:
-                await self._update_task
-            except asyncio.CancelledError:
-                pass
+        self._update_task.cancel()
+        try:
+            await self._update_task
+        except asyncio.CancelledError:
+            pass
 
-        if self._socket is not None:
-            self._socket.close()
+        self._socket.close()
 
         # Unblock any waiting iterator
-        if self._connection is not None:
-            self._connection._feed_disconnect()
+        self._connection._feed_disconnect()
 
     async def _drain(self) -> None:
         """Wait until the reliability layer has no pending outgoing data."""
-        while (
-            self._connection is not None
-            and self._connection.has_pending_data
-            and self._connection.state == ConnectionState.DISCONNECTING
-        ):
+        while self._connection.has_pending_data and self._connection.state == ConnectionState.DISCONNECTING:
             await asyncio.sleep(0.01)
 
     @property
     def is_connected(self) -> bool:
         """``True`` if the client is fully connected to the server."""
-        return self._connection is not None and self._connection.state == ConnectionState.CONNECTED
+        return self._connection.state == ConnectionState.CONNECTED
 
     @property
     def local_address(self) -> tuple[str, int]:
         """The local ``(host, port)`` the client socket is bound to."""
-        if self._socket is not None:
-            return self._socket.local_address
-        return ("0.0.0.0", 0)
+        return self._socket.local_address
+
+    @property
+    def timeout(self) -> float:
+        """Dead-connection timeout in seconds.
+
+        Matches C++ ``SetTimeoutTime()`` / ``GetTimeoutTime()``
+        (``RakPeer.cpp:2524-2546``).  Separate from the handshake timeout
+        passed to :meth:`connect`.
+        """
+        return self._connection.timeout
+
+    @timeout.setter
+    def timeout(self, value: float) -> None:
+        self._connection.timeout = value
 
     @property
     def mtu(self) -> int:
@@ -175,9 +188,7 @@ class Client:
 
         Matches C++ ``RakPeer::GetMTUSize()`` (``RakPeer.cpp:2572``).
         """
-        if self._connection is not None:
-            return self._connection.mtu
-        return 0
+        return self._connection.mtu
 
     # ------------------------------------------------------------------
     # Sending
@@ -199,8 +210,6 @@ class Client:
         Raises:
             RuntimeError: If the client is not connected.
         """
-        if self._connection is None:
-            raise RuntimeError("Client is not connected")
         self._connection._send(data, reliability, channel)
 
     # ------------------------------------------------------------------
@@ -216,8 +225,6 @@ class Client:
         Raises:
             ConnectionError: If the connection was closed.
         """
-        if self._connection is None:
-            raise ConnectionError("Client is not connected")
         return await self._connection.recv()
 
     async def __aenter__(self) -> "Client":
@@ -231,8 +238,6 @@ class Client:
 
         The iterator ends when the connection is closed.
         """
-        if self._connection is None:
-            return
         async for data in self._connection:
             yield data
 
@@ -252,8 +257,6 @@ class Client:
 
     def _on_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         """Callback for incoming UDP datagrams."""
-        if self._connection is None:
-            return
         now = _time.monotonic()
 
         responses = self._connection.on_datagram(data, now)
@@ -277,8 +280,7 @@ class Client:
 
     def _send_raw(self, data: bytes, addr: tuple[str, int]) -> None:
         """Send raw bytes over the UDP socket."""
-        if self._socket is not None:
-            self._socket.send_to(data, addr)
+        self._socket.send_to(data, addr)
 
     # ------------------------------------------------------------------
     # Internal: update loop
@@ -288,8 +290,6 @@ class Client:
         """Background task that ticks the connection every ~10 ms."""
         try:
             while True:
-                if self._connection is None:
-                    break
                 # Stop if closed AND no pending data to flush
                 if self._closed and not self._connection.has_pending_data:
                     break

@@ -126,22 +126,30 @@ class Server:
         """Block until :meth:`close` is called."""
         await self._closed_event.wait()
 
-    async def close(self) -> None:
-        """Gracefully shut down the server."""
+    async def close(self, *, notify: bool = True) -> None:
+        """Shut down the server.
+
+        Args:
+            notify: If ``True`` (default), send ``ID_DISCONNECTION_NOTIFICATION``
+                to each connected peer before shutting down.  If ``False``,
+                silently drop all connections — clients will detect the loss
+                via timeout.
+        """
         if self._closed:
             return
         self._closed = True
 
-        # Disconnect all peers (queues notifications)
-        for addr, conn in list(self._peers.items()):
-            conn.disconnect()
+        if notify:
+            # Disconnect all peers (queues notifications)
+            for addr, conn in list(self._peers.items()):
+                conn.disconnect()
 
-        # Let the update loop flush disconnect notifications.
-        if self._update_task is not None:
-            try:
-                await asyncio.wait_for(self._drain_all(), timeout=1.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
+            # Let the update loop flush disconnect notifications.
+            if self._update_task is not None:
+                try:
+                    await asyncio.wait_for(self._drain_all(), timeout=1.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
 
         if self._update_task is not None:
             self._update_task.cancel()
@@ -185,6 +193,18 @@ class Server:
         if self._socket is not None:
             return self._socket.local_address
         return self._local_address
+
+    @property
+    def timeout(self) -> float:
+        """Default dead-connection timeout in seconds.
+
+        Delegates to :meth:`get_timeout` / :meth:`set_timeout`.
+        """
+        return self.get_timeout()
+
+    @timeout.setter
+    def timeout(self, value: float) -> None:
+        self.set_timeout(value)
 
     # ------------------------------------------------------------------
     # Offline ping

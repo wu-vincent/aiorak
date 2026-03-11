@@ -340,7 +340,7 @@ class Connection:
 
         # Timeout check
         if self.state == ConnectionState.CONNECTING:
-            # C++ uses a fixed 10s timeout from connection start (RakPeer.cpp:5877-5881)
+            # C++ reuses defaultTimeoutTime for the handshake check (RakPeer.cpp:5877-5881).
             if self._handshake_start > 0 and now - self._handshake_start > self.timeout:
                 logger.warning("Handshake with %s timed out after %.1fs", self.address, self.timeout)
                 self._events.append((_Signal.DISCONNECT, b""))
