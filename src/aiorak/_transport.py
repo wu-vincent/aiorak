@@ -65,6 +65,16 @@ class RakNetTransport(asyncio.DatagramProtocol):
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             except OSError:
                 pass
+            # On Windows, prevent ICMP "port unreachable" errors from dead
+            # peers from disrupting recvfrom on this socket.  Without this,
+            # Python < 3.13 ProactorEventLoop stops receiving datagrams
+            # after an ICMP error.  Matches C++ WSAIoctl(SIO_UDP_CONNRESET).
+            if sys.platform == "win32":
+                try:
+                    SIO_UDP_CONNRESET = 0x9800000C
+                    sock.ioctl(SIO_UDP_CONNRESET, False)
+                except OSError:
+                    pass
             # IP_DONTFRAGMENT for MTU discovery — platform-specific
             if sys.platform == "win32":
                 try:

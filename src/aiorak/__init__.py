@@ -256,6 +256,11 @@ async def ping(
         bs.write_uint64(guid)
         socket.send_to(bs.get_data(), address)
 
-        return await asyncio.wait_for(result_future, timeout=timeout)
+        try:
+            return await asyncio.wait_for(result_future, timeout=timeout)
+        except asyncio.CancelledError:
+            # Python 3.10 wait_for() can raise CancelledError instead of
+            # TimeoutError.  Normalise to TimeoutError for a consistent API.
+            raise TimeoutError() from None
     finally:
         socket.close()
