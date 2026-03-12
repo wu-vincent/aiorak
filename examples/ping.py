@@ -1,4 +1,4 @@
-"""Offline ping — starts a server, sends unconnected pings, measures RTT.
+"""Offline ping - starts a server, sends unconnected pings, measures RTT.
 
 Uses the ``aiorak.ping()`` API for lightweight latency measurement
 without establishing a full connection.  Also demonstrates

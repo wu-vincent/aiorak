@@ -94,7 +94,7 @@ class ConnectionState(enum.IntEnum):
     """Handshake in progress (offline or reliable phase)."""
 
     CONNECTED = 2
-    """Fully connected — application data can be exchanged."""
+    """Fully connected - application data can be exchanged."""
 
     DISCONNECTING = 3
     """Graceful disconnect initiated; waiting for final ACK."""
@@ -371,7 +371,7 @@ class Connection:
                 self._events.append((_Signal.DISCONNECT, b""))
                 self.state = ConnectionState.DISCONNECTED
 
-        # Reliable keepalive — C++ sends a RELIABLE ping when no reliable data
+        # Reliable keepalive - C++ sends a RELIABLE ping when no reliable data
         # has been sent for timeoutTime/2 (RakPeer.cpp:5857-5869).
         if self.state == ConnectionState.CONNECTED:
             reliable_send = self._reliability._last_reliable_send
@@ -660,7 +660,7 @@ class Connection:
             now: Current monotonic time.
 
         Returns:
-            ``None`` — the connection request is sent via the reliability layer.
+            ``None`` - the connection request is sent via the reliability layer.
         """
         bs = BitStream(data)
         bs.read_uint8()  # msg ID
@@ -700,14 +700,14 @@ class Connection:
             now: Current monotonic time.
 
         Returns:
-            Optional list of response datagrams (usually ``None`` — responses
+            Optional list of response datagrams (usually ``None`` - responses
             are queued via the reliability layer).
         """
         if len(data) < 1:
             return None
         msg_id = data[0]
 
-        # Handshake messages — only valid during the connecting phase
+        # Handshake messages - only valid during the connecting phase
         if msg_id == ID_CONNECTION_REQUEST and self.is_server and self.state == ConnectionState.CONNECTING:
             return self._handle_connection_request(data, now)
         elif (
@@ -718,15 +718,15 @@ class Connection:
             self._handle_new_incoming_connection(data, now)
             return None
 
-        # Internal connected messages — validate expected size to avoid
+        # Internal connected messages - validate expected size to avoid
         # false positives on user data that happens to start with the same
         # byte value (e.g. ID_CONNECTED_PING = 0x00).
         elif msg_id == ID_CONNECTED_PING and len(data) == 9:
             return self._handle_connected_ping(data, now)
         elif msg_id == ID_CONNECTED_PONG and len(data) == 17:
-            return None  # Pong received — RTT already updated by ACK layer
+            return None  # Pong received - RTT already updated by ACK layer
         elif msg_id == ID_DISCONNECTION_NOTIFICATION and len(data) == 1:
-            # Don't disconnect immediately — transition to DISCONNECTING and
+            # Don't disconnect immediately - transition to DISCONNECTING and
             # wait for the ACK containing this datagram to be sent, matching
             # C++ DISCONNECT_ON_NO_ACK (RakPeer.cpp:6097).
             self.state = ConnectionState.DISCONNECTING
@@ -752,7 +752,7 @@ class Connection:
             now: Current monotonic time.
 
         Returns:
-            ``None`` — the response is queued in the reliability layer.
+            ``None`` - the response is queued in the reliability layer.
         """
         bs = BitStream(data)
         bs.read_uint8()  # msg ID
@@ -792,7 +792,7 @@ class Connection:
             now: Current monotonic time.
 
         Returns:
-            ``None`` — the response is queued in the reliability layer.
+            ``None`` - the response is queued in the reliability layer.
         """
         bs = BitStream(data)
         bs.read_uint8()  # msg ID
@@ -827,7 +827,7 @@ class Connection:
         """Handle ``ID_NEW_INCOMING_CONNECTION`` (server side).
 
         Parses timestamps from the client to compute the first RTT sample,
-        then sends an immediate ping — matching C++ ``RakPeer.cpp:6005-6026``.
+        then sends an immediate ping - matching C++ ``RakPeer.cpp:6005-6026``.
         """
         bs = BitStream(data)
         bs.read_uint8()  # msg ID
@@ -882,7 +882,7 @@ class Connection:
             now: Current monotonic time.
 
         Returns:
-            ``None`` — the pong is queued in the reliability layer.
+            ``None`` - the pong is queued in the reliability layer.
         """
         bs = BitStream(data)
         bs.read_uint8()  # msg ID

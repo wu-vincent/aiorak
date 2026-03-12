@@ -8,7 +8,7 @@ standard RakNet 4.x peers.
 """
 
 # ---------------------------------------------------------------------------
-# Offline message magic (16 bytes) — used to distinguish offline handshake
+# Offline message magic (16 bytes) - used to distinguish offline handshake
 # packets from regular connected traffic.
 # Defined in RakPeer.cpp as OFFLINE_MESSAGE_DATA_ID.
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ OFFLINE_MAGIC: bytes = bytes(
 )
 
 # ---------------------------------------------------------------------------
-# Protocol version — must match the remote peer or the connection is rejected
+# Protocol version - must match the remote peer or the connection is rejected
 # with ``ID_INCOMPATIBLE_PROTOCOL_VERSION``.
 # ---------------------------------------------------------------------------
 RAKNET_PROTOCOL_VERSION: int = 6
@@ -78,7 +78,7 @@ Rejects packets claiming more fragments than this as malformed.
 With a typical MTU of 1400, this allows messages up to ~90 MB."""
 
 # ---------------------------------------------------------------------------
-# Sequence number space — 24-bit unsigned integers
+# Sequence number space - 24-bit unsigned integers
 # ---------------------------------------------------------------------------
 SEQ_NUM_BITS: int = 24
 SEQ_NUM_MAX: int = 0xFFFFFF
@@ -95,7 +95,7 @@ SYN_INTERVAL: float = 0.010
 update loop for sending ACKs."""
 
 # ---------------------------------------------------------------------------
-# Message IDs — first byte of every offline or reliable message.
+# Message IDs - first byte of every offline or reliable message.
 # Values taken from the ``DefaultMessageIDTypes`` enum in
 # ``MessageIdentifiers.h`` (C++ RakNet 4.081).
 # ---------------------------------------------------------------------------

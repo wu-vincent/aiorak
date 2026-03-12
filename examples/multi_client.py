@@ -1,4 +1,4 @@
-"""Multi-client stress test — spawns N clients that each send M messages."""
+"""Multi-client stress test - spawns N clients that each send M messages."""
 
 import argparse
 import asyncio

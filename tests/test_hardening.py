@@ -45,7 +45,7 @@ class TestReceivedWindow:
         # Fill the window
         for i in range(8):
             w.add(i)
-        # Add beyond window — forces advance
+        # Add beyond window - forces advance
         w.add(10)
         assert 10 in w
         # Old entries below new base should be considered received

@@ -1,4 +1,4 @@
-"""Interactive chat client — reads stdin, sends messages, prints received text."""
+"""Interactive chat client - reads stdin, sends messages, prints received text."""
 
 import argparse
 import asyncio

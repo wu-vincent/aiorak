@@ -1,4 +1,4 @@
-"""Chat relay server — broadcasts messages from any client to all others."""
+"""Chat relay server - broadcasts messages from any client to all others."""
 
 import argparse
 import asyncio

@@ -1,4 +1,4 @@
-"""Port of DroppedConnectionConvertTest.cpp — verify that dropped connections are detected.
+"""Port of DroppedConnectionConvertTest.cpp - verify that dropped connections are detected.
 
 C++ test: RakNet/Samples/Tests/DroppedConnectionConvertTest.cpp
 Uses CloseConnection(target, false) to silently drop connections, then
@@ -30,7 +30,7 @@ async def test_server_detects_client_gone(server_factory, client_factory):
     """Connect 5 clients, silently close 3, and verify the server detects the drops.
 
     Mirrors C++ test case 0: CloseConnection(serverID, false, 0) on the client
-    side — no notification is sent, so the server must detect the loss via timeout.
+    side - no notification is sent, so the server must detect the loss via timeout.
     """
     num_clients = 5
     num_to_drop = 3
@@ -46,7 +46,7 @@ async def test_server_detects_client_gone(server_factory, client_factory):
     await wait_for_peers(server, num_clients)
     assert len(server._peers) == num_clients
 
-    # Silently close the first 3 clients (no notification — matches C++
+    # Silently close the first 3 clients (no notification - matches C++
     # CloseConnection(serverID, false, 0) from RakPeer.cpp:1650)
     for i in range(num_to_drop):
         await clients[i].close(notify=False)

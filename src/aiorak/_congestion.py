@@ -1,6 +1,6 @@
 """TCP-like sliding window congestion control.
 
-This is a clean-room Python re-implementation of the algorithm found in
+This is a Python re-implementation of the algorithm found in
 ``CCRakNetSlidingWindow.cpp``.  It tracks round-trip time (RTT) with an
 exponentially weighted moving average, maintains a congestion window
 (``cwnd``), and implements slow-start / congestion-avoidance transitions.
@@ -123,7 +123,7 @@ class CongestionController:
         """Return the number of bytes available for retransmission.
 
         C++ ``CCRakNetSlidingWindow::GetRetransmissionBandwidth`` returns
-        ``unacknowledgedBytes`` — effectively unlimited retransmission.
+        ``unacknowledgedBytes`` - effectively unlimited retransmission.
 
         Args:
             unacked_bytes: Total bytes currently in-flight (unacknowledged).

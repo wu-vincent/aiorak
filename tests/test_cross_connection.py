@@ -1,4 +1,4 @@
-"""Port of CrossConnectionTest.cpp — simultaneous connections between two servers.
+"""Port of CrossConnectionTest.cpp - simultaneous connections between two servers.
 
 Since aiorak uses a client-server model (not peer-to-peer), the test creates
 two servers and connects a client from each side to the other server at the

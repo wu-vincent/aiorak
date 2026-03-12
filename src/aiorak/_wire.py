@@ -13,11 +13,11 @@ Every UDP payload begins with a 1-bit *isValid* flag (always ``1``), followed
 by a 1-bit *isACK* flag and a 1-bit *isNAK* flag.  Exactly one of the three
 resulting categories applies:
 
-* **ACK** — ``isValid=1, isACK=1``: carries a range list of acknowledged
+* **ACK** - ``isValid=1, isACK=1``: carries a range list of acknowledged
   datagram sequence numbers.
-* **NAK** — ``isValid=1, isACK=0, isNAK=1``: carries a range list of missing
+* **NAK** - ``isValid=1, isACK=0, isNAK=1``: carries a range list of missing
   datagram sequence numbers.
-* **Data** — ``isValid=1, isACK=0, isNAK=0``: carries a datagram sequence
+* **Data** - ``isValid=1, isACK=0, isNAK=0``: carries a datagram sequence
   number followed by one or more message frames.
 """
 
@@ -45,7 +45,7 @@ def encode_range_list(bs: BitStream, ranges: list[tuple[int, int]]) -> None:
         per range:
             minEqualsMax : uint8  (1 = single value, 0 = range)
             min          : uint24 (LE)
-            max          : uint24 (LE) — only if minEqualsMax == 0
+            max          : uint24 (LE) - only if minEqualsMax == 0
 
     Args:
         bs: Target bitstream to write into.
@@ -165,17 +165,17 @@ def encode_message_frame(bs: BitStream, frame: MessageFrame) -> None:
     bs.align_write_to_byte()
     bs.write_uint16(frame.data_bit_length)
 
-    # Reliable message number (uint24) — only for reliable modes
+    # Reliable message number (uint24) - only for reliable modes
     if frame.reliability.is_reliable:
         bs.write_uint24(frame.reliable_message_number)
 
     bs.align_write_to_byte()
 
-    # Sequencing index (uint24) — only for sequenced modes
+    # Sequencing index (uint24) - only for sequenced modes
     if frame.reliability.is_sequenced:
         bs.write_uint24(frame.sequencing_index)
 
-    # Ordering index (uint24) + channel (uint8) — for ordered/sequenced
+    # Ordering index (uint24) + channel (uint8) - for ordered/sequenced
     if frame.reliability.is_ordered:
         bs.write_uint24(frame.ordering_index)
         bs.write_uint8(frame.ordering_channel)
@@ -329,7 +329,7 @@ def encode_ack(ranges: list[tuple[int, int]], has_b_and_as: bool = False) -> byt
     bs.align_write_to_byte()
     # No timestamp (INCLUDE_TIMESTAMP_WITH_DATAGRAMS == 0)
     if has_b_and_as:
-        # AS as float — not implemented, write 0.0
+        # AS as float - not implemented, write 0.0
         bs.write_bytes(struct.pack(">f", 0.0))
     encode_range_list(bs, ranges)
     return bs.get_data()
@@ -418,7 +418,7 @@ def decode_datagram(data: bytes) -> tuple[DatagramHeader, list[MessageFrame] | l
     is_valid = bs.read_bit()
     if not is_valid:
         logger.debug("Datagram with isValid=0 (likely offline data), %d bytes", len(data))
-        raise ValueError("Datagram isValid bit is 0 — likely offline data")
+        raise ValueError("Datagram isValid bit is 0 - likely offline data")
 
     is_ack = bs.read_bit()
     header = DatagramHeader()
@@ -428,7 +428,7 @@ def decode_datagram(data: bytes) -> tuple[DatagramHeader, list[MessageFrame] | l
         header.has_b_and_as = bs.read_bit()
         bs.align_read_to_byte()
         if header.has_b_and_as:
-            # Read AS float (4 bytes) — discard for now
+            # Read AS float (4 bytes) - discard for now
             bs.read_bytes(4)
         ranges = decode_range_list(bs)
         return header, ranges

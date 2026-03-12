@@ -126,7 +126,7 @@ class Client:
         Args:
             notify: If ``True`` (default), send ``ID_DISCONNECTION_NOTIFICATION``
                 so the server detects the disconnect immediately.  If ``False``,
-                silently drop — the server will detect it via timeout.
+                silently drop - the server will detect it via timeout.
         """
         if self._closed:
             return

@@ -1,4 +1,4 @@
-"""Port of ServerClientTest.cpp — many clients connecting with bidirectional data flow."""
+"""Port of ServerClientTest.cpp - many clients connecting with bidirectional data flow."""
 
 import asyncio
 

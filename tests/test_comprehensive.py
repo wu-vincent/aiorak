@@ -1,4 +1,4 @@
-"""Port of ComprehensiveTest.cpp — stress test with random operations."""
+"""Port of ComprehensiveTest.cpp - stress test with random operations."""
 
 import asyncio
 import os
@@ -29,7 +29,7 @@ async def test_comprehensive_stress(server_factory):
     server = await server_factory(max_connections=num_slots)
     addr = server.local_address
 
-    # Pool of client slots — None means "not connected"
+    # Pool of client slots - None means "not connected"
     clients: list[aiorak.Client | None] = [None] * num_slots
 
     # Background tasks collecting recv data (so send buffers don't back up)

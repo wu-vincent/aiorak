@@ -252,7 +252,7 @@ class BitStream:
             self._read_bit_pos += 8 - remainder
 
     # ------------------------------------------------------------------
-    # Byte-aligned integer writes — big-endian unless noted
+    # Byte-aligned integer writes - big-endian unless noted
     # ------------------------------------------------------------------
 
     def write_uint8(self, value: int) -> None:
@@ -308,7 +308,7 @@ class BitStream:
         self._write_bit_pos += 64
 
     # ------------------------------------------------------------------
-    # Byte-aligned integer reads — big-endian unless noted
+    # Byte-aligned integer reads - big-endian unless noted
     # ------------------------------------------------------------------
 
     def read_uint8(self) -> int:
@@ -411,7 +411,7 @@ class BitStream:
         return result
 
     # ------------------------------------------------------------------
-    # Address encoding — RakNet SystemAddress format
+    # Address encoding - RakNet SystemAddress format
     # ------------------------------------------------------------------
 
     def write_address(self, host: str, port: int) -> None:

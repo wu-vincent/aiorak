@@ -1,4 +1,4 @@
-"""aiorak — Clean-room RakNet reliable UDP implementation for Python asyncio.
+"""aiorak - RakNet reliable UDP implementation for Python asyncio.
 
 This package provides an async/await API for communicating with RakNet peers
 over UDP.  It implements the RakNet wire protocol from scratch, aiming for
@@ -38,7 +38,10 @@ from ._connection import Connection
 from ._server import Server
 from ._types import PingResponse, Priority, Reliability
 
+__version__ = "0.1.0"
+
 __all__ = [
+    "__version__",
     "Client",
     "Connection",
     "Server",
@@ -176,7 +179,7 @@ async def ping(
 ) -> PingResponse:
     """Send an unconnected ping and wait for the pong response.
 
-    This does **not** establish a connection — it is useful for LAN server
+    This does **not** establish a connection - it is useful for LAN server
     discovery and pre-connection latency checks.
 
     Args:

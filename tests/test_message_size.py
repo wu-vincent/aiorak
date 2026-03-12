@@ -1,4 +1,4 @@
-"""Port of MessageSizeTest.cpp — send messages of various sizes and verify data integrity."""
+"""Port of MessageSizeTest.cpp - send messages of various sizes and verify data integrity."""
 
 import math
 

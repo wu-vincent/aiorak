@@ -122,10 +122,10 @@ class TestOrdering:
 
     def test_ordering_out_of_order(self):
         layer = _make_layer()
-        # Send indices 2, 0, 1 — only 0 should deliver immediately,
+        # Send indices 2, 0, 1 - only 0 should deliver immediately,
         # then 1 and 2 flush
 
-        # First send index 2 — buffered
+        # First send index 2 - buffered
         frame2 = MessageFrame(
             reliability=Reliability.RELIABLE_ORDERED,
             data=b"msg2",
@@ -136,7 +136,7 @@ class TestOrdering:
         layer.on_datagram_received(encode_datagram(0, [frame2]), time.monotonic())
         assert layer.poll_receive() is None
 
-        # Send index 0 — delivers immediately
+        # Send index 0 - delivers immediately
         frame0 = MessageFrame(
             reliability=Reliability.RELIABLE_ORDERED,
             data=b"msg0",
@@ -149,7 +149,7 @@ class TestOrdering:
         assert r is not None
         assert r[0] == b"msg0"
 
-        # Send index 1 — delivers 1, then flushes 2
+        # Send index 1 - delivers 1, then flushes 2
         frame1 = MessageFrame(
             reliability=Reliability.RELIABLE_ORDERED,
             data=b"msg1",
@@ -171,7 +171,7 @@ class TestOrdering:
 class TestSequencing:
     def test_sequencing_drops_stale(self):
         layer = _make_layer()
-        # Send sequenced index 5 first — ordering_index must match expected (0)
+        # Send sequenced index 5 first - ordering_index must match expected (0)
         # for immediate delivery (C++ checks orderingIndex first).
         frame5 = MessageFrame(
             reliability=Reliability.UNRELIABLE_SEQUENCED,
@@ -182,7 +182,7 @@ class TestSequencing:
         )
         layer.on_datagram_received(encode_datagram(0, [frame5]), time.monotonic())
 
-        # Send sequenced index 3 — should be dropped (stale sequencing)
+        # Send sequenced index 3 - should be dropped (stale sequencing)
         frame3 = MessageFrame(
             reliability=Reliability.UNRELIABLE_SEQUENCED,
             data=b"old",
@@ -335,7 +335,7 @@ class TestMaxSplitCount:
         )
         layer.on_datagram_received(encode_datagram(0, [frame]), now)
 
-        # Should be rejected — no tracker created
+        # Should be rejected - no tracker created
         assert layer.poll_receive() is None
         assert len(layer._split_trackers) == 0
 

@@ -1,4 +1,4 @@
-"""Port of OfflineMessagesTest.cpp — verify offline ping/pong with custom data."""
+"""Port of OfflineMessagesTest.cpp - verify offline ping/pong with custom data."""
 
 import asyncio
 

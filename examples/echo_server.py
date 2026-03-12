@@ -1,4 +1,4 @@
-"""Minimal echo server — replies to every message with the same data."""
+"""Minimal echo server - replies to every message with the same data."""
 
 import argparse
 import asyncio

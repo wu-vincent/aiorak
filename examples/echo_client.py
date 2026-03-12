@@ -1,4 +1,4 @@
-"""Minimal echo client — sends 5 messages and prints replies."""
+"""Minimal echo client - sends 5 messages and prints replies."""
 
 import argparse
 import asyncio

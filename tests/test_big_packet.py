@@ -1,4 +1,4 @@
-"""Port of BigPacketTest.cpp — send large packets via RELIABLE_ORDERED and verify integrity."""
+"""Port of BigPacketTest.cpp - send large packets via RELIABLE_ORDERED and verify integrity."""
 
 import asyncio
 
@@ -61,7 +61,7 @@ async def test_big_packet_500kb(server_factory, client_factory):
 
 @pytest.mark.slow
 async def test_big_packet_5mb(server_factory, client_factory):
-    """5 MB packet — verify length only (too large for byte-by-byte comparison)."""
+    """5 MB packet - verify length only (too large for byte-by-byte comparison)."""
     await _big_packet_test(
         server_factory,
         client_factory,

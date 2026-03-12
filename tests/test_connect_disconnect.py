@@ -40,7 +40,7 @@ async def _wait_for_no_peers(server: aiorak.Server, timeout: float = 5.0) -> Non
 
 @pytest.mark.timeout(30)
 async def test_connect_disconnect_cycles(server_factory):
-    """Connect 4 clients, disconnect all, reconnect — repeat for 3 cycles.
+    """Connect 4 clients, disconnect all, reconnect - repeat for 3 cycles.
 
     Each cycle verifies that the server correctly tracks all connections and
     that slots are freed after disconnect so they can be reused.

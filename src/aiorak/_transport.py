@@ -5,9 +5,9 @@ transport so that the rest of the library can send and receive UDP datagrams
 without coupling directly to the event loop.
 
 Classes:
-    :class:`RakNetTransport` — ``asyncio.DatagramProtocol`` subclass that
+    :class:`RakNetTransport` - ``asyncio.DatagramProtocol`` subclass that
         dispatches received datagrams to a callback.
-    :class:`UDPSocket` — convenience wrapper around the asyncio transport
+    :class:`UDPSocket` - convenience wrapper around the asyncio transport
         for sending datagrams.
 """
 
@@ -65,7 +65,7 @@ class RakNetTransport(asyncio.DatagramProtocol):
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             except OSError:
                 pass
-            # IP_DONTFRAGMENT for MTU discovery — platform-specific
+            # IP_DONTFRAGMENT for MTU discovery - platform-specific
             if sys.platform == "win32":
                 try:
                     IP_DONTFRAGMENT = 14  # Windows SIO_UDP_SET_DONTFRAGMENT
@@ -98,7 +98,7 @@ class RakNetTransport(asyncio.DatagramProtocol):
     def error_received(self, exc: Exception) -> None:
         """Called when a send/receive error occurs.
 
-        Logs the error but does not tear down the transport — transient UDP
+        Logs the error but does not tear down the transport - transient UDP
         errors (e.g. ICMP unreachable) are expected.
 
         Args:

@@ -19,26 +19,26 @@ ruff check src/ tests/
 ruff format src/ tests/
 ```
 
-No build step required — pure Python package with zero runtime dependencies. Uses hatchling for packaging. Python 3.10+.
+No build step required - pure Python package with zero runtime dependencies. Uses hatchling for packaging. Python 3.10+.
 
 ## Architecture
 
-aiorak is a clean-room RakNet reliable UDP implementation for Python asyncio. It is wire-compatible with RakNet 4.x peers but written from scratch (not ported from C++).
+aiorak is a RakNet reliable UDP implementation for Python asyncio. It is wire-compatible with RakNet 4.x peers, written from scratch using the C++ source as reference (not a direct port).
 
 ### Layer stack (bottom to top)
 
-1. **`_transport.py`** — Thin asyncio `DatagramProtocol` wrapper. Dispatches raw UDP datagrams to a callback.
-2. **`_bitstream.py`** — Bit-level serialization matching RakNet's `BitStream` class. All wire encoding goes through this.
-3. **`_wire.py`** — Datagram header, message frame, and range list encode/decode. Three datagram types: ACK, NAK, and Data (containing message frames).
-4. **`_congestion.py`** — TCP-like sliding window congestion control. Tracks RTT, cwnd, and RTO estimation.
-5. **`_reliability.py`** — Core reliability layer per connection: send/receive queues, ACK/NAK generation, ordering heaps (32 channels), sequencing, split-packet reassembly, resend buffer. Driven by periodic `update()` calls (~10ms) and `on_datagram_received()`.
-6. **`_connection.py`** — Per-peer state machine (`DISCONNECTED → CONNECTING → CONNECTED → DISCONNECTING → DISCONNECTED`). Owns a `ReliabilityLayer` + `CongestionController`. Handles the 6-message handshake (3 offline + 3 reliable).
-7. **`_server.py` / `_client.py`** — High-level async API. Server spawns handler coroutines per peer. Client provides `send()`/`recv()`/`async for`.
+1. **`_transport.py`** - Thin asyncio `DatagramProtocol` wrapper. Dispatches raw UDP datagrams to a callback.
+2. **`_bitstream.py`** - Bit-level serialization matching RakNet's `BitStream` class. All wire encoding goes through this.
+3. **`_wire.py`** - Datagram header, message frame, and range list encode/decode. Three datagram types: ACK, NAK, and Data (containing message frames).
+4. **`_congestion.py`** - TCP-like sliding window congestion control. Tracks RTT, cwnd, and RTO estimation.
+5. **`_reliability.py`** - Core reliability layer per connection: send/receive queues, ACK/NAK generation, ordering heaps (32 channels), sequencing, split-packet reassembly, resend buffer. Driven by periodic `update()` calls (~10ms) and `on_datagram_received()`.
+6. **`_connection.py`** - Per-peer state machine (`DISCONNECTED -> CONNECTING -> CONNECTED -> DISCONNECTING -> DISCONNECTED`). Owns a `ReliabilityLayer` + `CongestionController`. Handles the 6-message handshake (3 offline + 3 reliable).
+7. **`_server.py` / `_client.py`** - High-level async API. Server spawns handler coroutines per peer. Client provides `send()`/`recv()`/`async for`.
 
 ### Handshake flow
 
-**Offline phase** (raw UDP, identified by OFFLINE_MAGIC): OpenConnectionRequest1 → Reply1 → Request2 → Reply2 (establishes MTU).
-**Reliable phase** (through ReliabilityLayer): ConnectionRequest → ConnectionRequestAccepted → NewIncomingConnection.
+**Offline phase** (raw UDP, identified by OFFLINE_MAGIC): OpenConnectionRequest1 -> Reply1 -> Request2 -> Reply2 (establishes MTU).
+**Reliable phase** (through ReliabilityLayer): ConnectionRequest -> ConnectionRequestAccepted -> NewIncomingConnection.
 
 ### Key design points
 
@@ -50,7 +50,7 @@ aiorak is a clean-room RakNet reliable UDP implementation for Python asyncio. It
 
 ## Testing
 
-- `pytest-asyncio` with `asyncio_mode = "auto"` — all async test functions run automatically.
+- `pytest-asyncio` with `asyncio_mode = "auto"` - all async test functions run automatically.
 - `conftest.py` provides `server_factory`, `client_factory`, and `server_and_client` fixtures for integration tests.
 - Unit tests instantiate internal classes directly (e.g., `ReliabilityLayer`, `BitStream`).
 - Integration tests use real UDP loopback connections.

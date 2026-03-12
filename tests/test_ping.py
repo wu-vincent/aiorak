@@ -1,4 +1,4 @@
-"""Port of PingTest.cpp — verify ping latency measurement and timeout behaviour."""
+"""Port of PingTest.cpp - verify ping latency measurement and timeout behaviour."""
 
 import pytest
 

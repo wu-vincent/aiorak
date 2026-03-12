@@ -196,7 +196,7 @@ class Server:
         Args:
             notify: If ``True`` (default), send ``ID_DISCONNECTION_NOTIFICATION``
                 to each connected peer before shutting down.  If ``False``,
-                silently drop all connections — clients will detect the loss
+                silently drop all connections - clients will detect the loss
                 via timeout.
         """
         if self._closed:
@@ -389,20 +389,20 @@ class Server:
             if data[0] in (ID_UNCONNECTED_PING, ID_UNCONNECTED_PING_OPEN_CONNECTIONS):
                 self._handle_unconnected_ping(data, addr)
                 return
-            # OCR1 is handled statelessly — no Connection object is created.
+            # OCR1 is handled statelessly - no Connection object is created.
             # This matches C++ RakPeer.cpp:5127-5197 which only validates the
             # protocol version, computes MTU, and sends OR1.  No
             # RemoteSystemStruct is allocated until OCR2.
             if data[0] == ID_OPEN_CONNECTION_REQUEST_1:
                 self._handle_open_request_1(data, addr)
                 return
-            # OCR2 from a new address — create the Connection now.
+            # OCR2 from a new address - create the Connection now.
             if len(data) >= 17 and data[0] == ID_OPEN_CONNECTION_REQUEST_2 and data[1:17] == OFFLINE_MAGIC:
                 conn = self._create_connection_from_ocr2(data, addr, now)
                 if conn is None:
                     return  # Rejected (capacity / GUID / frequency)
             else:
-                return  # Unknown peer, not an offline message — drop
+                return  # Unknown peer, not an offline message - drop
 
         conn = self._connections.get(addr)
         if conn is None:
@@ -454,7 +454,7 @@ class Server:
         Checks performed (in C++ order from RakPeer.cpp:5198-5384):
 
         1. GUID duplicate check (RakPeer.cpp:5255-5297)
-        2. Capacity check — ``AllowIncomingConnections()`` (RakPeer.cpp:5349)
+        2. Capacity check - ``AllowIncomingConnections()`` (RakPeer.cpp:5349)
         3. Connection frequency limiting (RakPeer.cpp:3604-3623)
 
         Returns:
@@ -519,7 +519,7 @@ class Server:
                     return None
             self._ip_connection_times[host] = now
 
-        # --- All checks passed — create Connection ---
+        # --- All checks passed - create Connection ---
         self._guid_to_addr[guid] = addr
         logger.debug("New connection from %s (GUID %016x)", addr, guid)
         conn = Connection(
@@ -536,7 +536,7 @@ class Server:
         conn._system_index = len(self._connections)
         conn._local_port = self._bound_port
         conn.remote_guid = guid
-        # Set CONNECTING state and handshake timing — previously done by
+        # Set CONNECTING state and handshake timing - previously done by
         # _handle_open_request_1, now skipped since OCR1 is stateless.
         conn.state = ConnectionState.CONNECTING
         conn._handshake_start = now

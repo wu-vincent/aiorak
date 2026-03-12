@@ -1,8 +1,8 @@
 # aiorak
 
-Clean-room [RakNet](http://www.jenkinssoftware.com/) reliable UDP implementation for Python asyncio.
+[RakNet](http://www.jenkinssoftware.com/) reliable UDP implementation for Python asyncio, written from scratch using the C++ source as reference.
 
-Wire-compatible with RakNet 4.x peers — implements the protocol from scratch without porting the C++ code.
+Wire-compatible with RakNet 4.x peers. Zero runtime dependencies.
 
 ## Features
 
@@ -66,7 +66,7 @@ async for data in client:
 | `await server.close()`                     | Gracefully shut down and disconnect all peers. |
 | `server.local_address`                     | The `(host, port)` the server is bound to.     |
 | `server.set_offline_ping_response(data)`   | Set custom data for unconnected pong replies.  |
-| `async with server:`                       | Context manager — closes on exit.              |
+| `async with server:`                       | Context manager - closes on exit.              |
 
 ### `Client`
 
@@ -91,9 +91,9 @@ async for data in client:
 
 ### Enums
 
-- **`Reliability`** — `UNRELIABLE`, `UNRELIABLE_SEQUENCED`, `RELIABLE`, `RELIABLE_ORDERED`, `RELIABLE_SEQUENCED`,
+- **`Reliability`** - `UNRELIABLE`, `UNRELIABLE_SEQUENCED`, `RELIABLE`, `RELIABLE_ORDERED`, `RELIABLE_SEQUENCED`,
   `UNRELIABLE_WITH_ACK_RECEIPT`, `RELIABLE_WITH_ACK_RECEIPT`, `RELIABLE_ORDERED_WITH_ACK_RECEIPT`
-- **`Priority`** — `IMMEDIATE`, `HIGH`, `MEDIUM`, `LOW`
+- **`Priority`** - `IMMEDIATE`, `HIGH`, `MEDIUM`, `LOW`
 
 ## Requirements
 

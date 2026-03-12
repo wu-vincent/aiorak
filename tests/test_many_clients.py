@@ -1,4 +1,4 @@
-"""Port of ManyClientsOneServer*Test.cpp — connect, disconnect, reconnect patterns.
+"""Port of ManyClientsOneServer*Test.cpp - connect, disconnect, reconnect patterns.
 
 Consolidates ManyClientsOneServerBlockingTest, ManyClientsOneServerNonBlockingTest,
 ManyClientsOneServerDeallocateTest, and ManyClientsOneServerDeallocateBlockingTest.
@@ -78,7 +78,7 @@ async def test_disconnect_reconnect_cycle(server_factory):
     assert len(server._peers) >= NUM_CLIENTS
 
     for cycle in range(2):
-        # Disconnect all clients — graceful disconnect flushes notification.
+        # Disconnect all clients - graceful disconnect flushes notification.
         await _close_all(clients)
 
         # Give the server a moment to process disconnect notifications.
@@ -141,7 +141,7 @@ async def test_abrupt_disconnect(server_factory):
         c._socket._transport.close()
 
     # Wait for the server to detect the dropped connections.
-    # Must wait for both _peers and _connections to drain — stale entries
+    # Must wait for both _peers and _connections to drain - stale entries
     # in _connections block new connection acceptance.
     deadline = time.monotonic() + 15.0
     while (len(server._peers) > 0 or len(server._connections) > 0) and time.monotonic() < deadline:

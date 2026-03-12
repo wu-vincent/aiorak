@@ -27,7 +27,10 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/MagicDroidX/aiorak"
+Homepage = "https://github.com/wu-vincent/aiorak"
+Repository = "https://github.com/wu-vincent/aiorak"
+Issues = "https://github.com/wu-vincent/aiorak/issues"
+Changelog = "https://github.com/wu-vincent/aiorak/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

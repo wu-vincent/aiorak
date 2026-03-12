@@ -2,9 +2,9 @@
 
 This module provides the core type definitions used across the library:
 
-* :class:`Reliability` — packet delivery guarantees (mirrors the C++ enum).
-* :class:`Priority` — send-queue priority levels.
-* :class:`PingResponse` — result of an offline ping.
+* :class:`Reliability` - packet delivery guarantees (mirrors the C++ enum).
+* :class:`Priority` - send-queue priority levels.
+* :class:`PingResponse` - result of an offline ping.
 """
 
 import enum
@@ -22,7 +22,7 @@ class Reliability(enum.IntEnum):
     """Fire-and-forget.  No ordering, no retry."""
 
     UNRELIABLE_SEQUENCED = 1
-    """Unreliable but sequenced — stale packets are silently dropped."""
+    """Unreliable but sequenced - stale packets are silently dropped."""
 
     RELIABLE = 2
     """Retransmitted until acknowledged.  No ordering guarantee."""

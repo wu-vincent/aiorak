@@ -92,7 +92,7 @@ class _ReliableMessageWindow:
         """Return True if *reliable_num* is new, False if duplicate."""
         hole_count = (reliable_num - self._base) & SEQ_NUM_MAX
 
-        # Behind the base (wrapped around) — duplicate
+        # Behind the base (wrapped around) - duplicate
         if hole_count >= HALF_SEQ:
             return False
 
@@ -336,7 +336,7 @@ class ReliabilityLayer:
         return None
 
     # ------------------------------------------------------------------
-    # Periodic update — build & send datagrams
+    # Periodic update - build & send datagrams
     # ------------------------------------------------------------------
 
     def update(self, now: float) -> list[bytes]:
@@ -393,7 +393,7 @@ class ReliabilityLayer:
         datagram_overhead = 9
         max_datagram_payload = self._mtu - UDP_HEADER_SIZE - datagram_overhead
 
-        # 6a. Pack resend frames (bypass cwnd — separate retransmission bandwidth)
+        # 6a. Pack resend frames (bypass cwnd - separate retransmission bandwidth)
         if resend_frames:
             outgoing.extend(self._pack_datagrams(resend_frames, max_datagram_payload, now, rto, is_resend=True))
 
@@ -476,7 +476,7 @@ class ReliabilityLayer:
                     rmn = frame.reliable_message_number
                     existing = self._resend_buffer.get(rmn)
                     if existing is not None:
-                        # Resend — update tracking with exponential backoff
+                        # Resend - update tracking with exponential backoff
                         existing.next_action_time = now + rto * (2 ** min(existing.times_sent, 5))
                         existing.retransmission_time = rto
                         existing.times_sent += 1
@@ -522,7 +522,7 @@ class ReliabilityLayer:
                 seq = (seq + 1) & SEQ_NUM_MAX
 
     def _handle_nak(self, ranges: list[tuple[int, int]]) -> None:
-        """Process NAKs — mark affected messages for immediate resend.
+        """Process NAKs - mark affected messages for immediate resend.
 
         Unlike ACK handling, NAK does NOT remove the datagram history entry.
         The datagram may still arrive later and be ACK'd, so the record must
@@ -619,7 +619,7 @@ class ReliabilityLayer:
             # C++ checks orderingIndex FIRST for sequenced packets
             # (ReliabilityLayer.cpp:1283-1341).
             if frame.ordering_index == self._expected_ordering_index[ch]:
-                # Current ordering slot — check sequencing index
+                # Current ordering slot - check sequencing index
                 if self._highest_sequenced[ch] == -1 or seq_greater_than(
                     frame.sequencing_index & SEQ_NUM_MAX,
                     self._highest_sequenced[ch] & SEQ_NUM_MAX,
@@ -631,7 +631,7 @@ class ReliabilityLayer:
                 frame.ordering_index & SEQ_NUM_MAX,
                 self._expected_ordering_index[ch] & SEQ_NUM_MAX,
             ):
-                # Future ordering slot — buffer in ordering heap
+                # Future ordering slot - buffer in ordering heap
                 self._heap_counter += 1
                 heapq.heappush(
                     self._ordering_heaps[ch],
@@ -658,7 +658,7 @@ class ReliabilityLayer:
             # else: stale ordering index, silently drop
 
         else:
-            # UNRELIABLE, RELIABLE, *_WITH_ACK_RECEIPT — deliver directly
+            # UNRELIABLE, RELIABLE, *_WITH_ACK_RECEIPT - deliver directly
             self._receive_queue.append((frame.data, ch))
 
     def _flush_ordering_heap(self, channel: int) -> None:
