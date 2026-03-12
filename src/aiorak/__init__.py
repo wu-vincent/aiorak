@@ -256,11 +256,15 @@ async def ping(
         bs.write_uint64(guid)
         socket.send_to(bs.get_data(), address)
 
+        # Use a manual timer instead of asyncio.wait_for() because the
+        # latter has a race condition on Python 3.10 with raw Futures that
+        # can leak CancelledError instead of raising TimeoutError.
+        timeout_handle = loop.call_later(timeout, lambda: result_future.done() or result_future.cancel())
         try:
-            return await asyncio.wait_for(result_future, timeout=timeout)
+            return await result_future
         except asyncio.CancelledError:
-            # Python 3.10 wait_for() can raise CancelledError instead of
-            # TimeoutError.  Normalise to TimeoutError for a consistent API.
             raise TimeoutError() from None
+        finally:
+            timeout_handle.cancel()
     finally:
         socket.close()

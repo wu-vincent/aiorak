@@ -17,6 +17,8 @@ Example::
 import asyncio
 import logging
 import random
+import socket as _socket
+import sys
 import time as _time
 from collections.abc import Awaitable, Callable
 
@@ -45,6 +47,50 @@ from ._transport import RakNetTransport, UDPSocket
 from ._types import Reliability
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Windows: SIO_UDP_CONNRESET
+# ---------------------------------------------------------------------------
+
+_SIO_UDP_CONNRESET = 0x9800000C
+
+
+def _set_udp_connreset(sock: _socket.socket) -> None:
+    """Disable ICMP "port unreachable" errors on a Windows UDP socket.
+
+    Without this, an ICMP error from a dead peer causes the
+    ProactorEventLoop (Python < 3.13) to stop receiving datagrams on
+    the socket entirely.
+
+    Tries ``socket.ioctl`` first (Python 3.13+), then falls back to
+    ``ctypes`` for older interpreters where ``ioctl`` rejects the
+    command.
+    """
+    try:
+        sock.ioctl(_SIO_UDP_CONNRESET, False)
+        return
+    except (ValueError, OSError):
+        pass
+    # Fallback: call WSAIoctl via ctypes (Python < 3.13).
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        option = ctypes.c_ulong(0)
+        returned = ctypes.wintypes.DWORD(0)
+        ctypes.windll.ws2_32.WSAIoctl(  # type: ignore[union-attr]
+            sock.fileno(),
+            _SIO_UDP_CONNRESET,
+            ctypes.byref(option),
+            ctypes.sizeof(option),
+            None,
+            0,
+            ctypes.byref(returned),
+            None,
+            None,
+        )
+    except Exception:
+        pass
 
 
 class Server:
@@ -111,12 +157,30 @@ class Server:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    def _make_server_socket(self) -> _socket.socket:
+        """Create and bind the UDP socket with platform-specific options.
+
+        On Windows, sets ``SIO_UDP_CONNRESET`` to prevent ICMP "port
+        unreachable" errors from dead peers from disrupting ``recvfrom``
+        on the server socket.  Without this, Python < 3.13's
+        ProactorEventLoop stops receiving datagrams after an ICMP error.
+        """
+        host, _port = self._local_address
+        family = _socket.AF_INET6 if ":" in host else _socket.AF_INET
+        sock = _socket.socket(family, _socket.SOCK_DGRAM, _socket.IPPROTO_UDP)
+        sock.setblocking(False)
+        if sys.platform == "win32":
+            _set_udp_connreset(sock)
+        sock.bind(self._local_address)
+        return sock
+
     async def start(self) -> None:
         """Bind the UDP socket and start the background update loop."""
         loop = asyncio.get_running_loop()
+        sock = self._make_server_socket()
         transport, _protocol = await loop.create_datagram_endpoint(
             lambda: RakNetTransport(self._on_datagram),
-            local_addr=self._local_address,
+            sock=sock,
         )
         self._socket = UDPSocket(transport)
         self._bound_port = self._socket.local_address[1]
