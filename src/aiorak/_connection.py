@@ -178,7 +178,7 @@ class Connection:
     # Public async interface
     # ------------------------------------------------------------------
 
-    async def send(
+    def send(
         self, data: bytes, reliability: Reliability = Reliability.RELIABLE_ORDERED, channel: int = 0
     ) -> None:
         """Send a message to this peer.
