@@ -252,6 +252,11 @@ class Server:
         await self.close()
 
     @property
+    def guid(self) -> int:
+        """The 64-bit GUID that identifies this server in the RakNet protocol."""
+        return self._guid
+
+    @property
     def local_address(self) -> tuple[str, int]:
         """The actual ``(host, port)`` the server socket is bound to."""
         if self._socket is not None:
