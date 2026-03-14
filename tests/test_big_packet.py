@@ -26,13 +26,17 @@ async def _big_packet_test(
     payload = _make_pattern(size)
 
     async def handler(conn: aiorak.Connection):
-        await conn.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
+        conn.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
 
     server = await server_factory(handler=handler)
     addr = server.local_address
     client = await client_factory(addr)
 
-    received = await asyncio.wait_for(client.recv(), timeout=timeout)
+    async def _recv():
+        async for data in client:
+            return data
+
+    received = await asyncio.wait_for(_recv(), timeout=timeout)
 
     assert len(received) == size
     if verify_data:

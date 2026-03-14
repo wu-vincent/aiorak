@@ -72,8 +72,7 @@ async for data in client:
 
 | Method / Property                               | Description                                    |
 |-------------------------------------------------|------------------------------------------------|
-| `await client.send(data, reliability, channel)` | Send a message to the server.                  |
-| `await client.recv()`                           | Wait for and return the next received packet.  |
+| `client.send(data, reliability, channel)`       | Send a message to the server.                  |
 | `async for data in client`                      | Iterate over received packets as `bytes`.      |
 | `await client.close()`                          | Disconnect and release resources.              |
 | `client.is_connected`                           | `True` if the handshake is complete.           |
@@ -83,8 +82,7 @@ async for data in client:
 
 | Method / Property                              | Description                                    |
 |------------------------------------------------|------------------------------------------------|
-| `await conn.send(data, reliability, channel)`  | Send a message to this peer.                   |
-| `await conn.recv()`                            | Wait for and return the next received packet.  |
+| `conn.send(data, reliability, channel)`        | Send a message to this peer.                   |
 | `async for data in conn`                       | Iterate over received packets as `bytes`.      |
 | `await conn.close()`                           | Disconnect this peer.                          |
 | `conn.address`                                 | The remote `(host, port)` of the peer.         |

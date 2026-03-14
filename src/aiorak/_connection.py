@@ -178,9 +178,7 @@ class Connection:
     # Public async interface
     # ------------------------------------------------------------------
 
-    def send(
-        self, data: bytes, reliability: Reliability = Reliability.RELIABLE_ORDERED, channel: int = 0
-    ) -> None:
+    def send(self, data: bytes, reliability: Reliability = Reliability.RELIABLE_ORDERED, channel: int = 0) -> None:
         """Send a message to this peer.
 
         Args:
@@ -194,20 +192,6 @@ class Connection:
         if self._closed:
             raise RuntimeError("Connection is closed")
         self._send(data, reliability, channel)
-
-    async def recv(self) -> bytes:
-        """Wait for and return the next received packet.
-
-        Returns:
-            The raw payload bytes.
-
-        Raises:
-            ConnectionError: If the peer disconnected.
-        """
-        data = await self._packet_queue.get()
-        if data is None:
-            raise ConnectionError("Peer disconnected")
-        return data
 
     async def close(self) -> None:
         """Disconnect this peer."""

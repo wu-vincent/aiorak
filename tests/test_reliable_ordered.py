@@ -29,7 +29,7 @@ async def test_reliable_ordered_multi_channel(server_factory, client_factory):
             # Header: 0x86 (ID) | seq (4 bytes) | channel (1 byte) | random padding
             padding_len = int.from_bytes(os.urandom(2), "big") % 5000 + 1
             payload = struct.pack(">BIB", 0x86, seq, ch) + os.urandom(padding_len)
-            await client.send(
+            client.send(
                 payload,
                 reliability=aiorak.Reliability.RELIABLE_ORDERED,
                 channel=ch,

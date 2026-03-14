@@ -7,7 +7,7 @@ iteration over incoming data packets as raw bytes.
 Example::
 
     client = await aiorak.connect(('127.0.0.1', 19132))
-    await client.send(b"hello")
+    client.send(b"hello")
     async for data in client:
         print("Got:", data)
 """
@@ -194,7 +194,7 @@ class Client:
     # Sending
     # ------------------------------------------------------------------
 
-    async def send(
+    def send(
         self,
         data: bytes,
         reliability: Reliability = Reliability.RELIABLE_ORDERED,
@@ -215,17 +215,6 @@ class Client:
     # ------------------------------------------------------------------
     # Receiving
     # ------------------------------------------------------------------
-
-    async def recv(self) -> bytes:
-        """Wait for and return the next received packet.
-
-        Returns:
-            The raw payload bytes.
-
-        Raises:
-            ConnectionError: If the connection was closed.
-        """
-        return await self._connection.recv()
 
     async def __aenter__(self) -> "Client":
         return self

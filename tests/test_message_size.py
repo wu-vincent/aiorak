@@ -33,7 +33,7 @@ async def test_message_size(server_factory, client_factory, stride: int):
     for i in range(count):
         msg = _make_message(stride, i)
         expected.append(msg)
-        await client.send(msg, reliability=aiorak.Reliability.RELIABLE_ORDERED)
+        client.send(msg, reliability=aiorak.Reliability.RELIABLE_ORDERED)
 
     # Collect echoed messages.
     received = await collect_packets(client, count, timeout=5.0)

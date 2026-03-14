@@ -65,11 +65,12 @@ async def test_bidirectional_data_flow(server_factory):
             received: list[bytes] = []
             for i in range(NUM_MESSAGES):
                 payload = f"client{client_id}-msg{i}".encode()
-                await client.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
+                client.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
 
-            for _ in range(NUM_MESSAGES):
-                data = await asyncio.wait_for(client.recv(), timeout=3.0)
+            async for data in client:
                 received.append(data)
+                if len(received) == NUM_MESSAGES:
+                    break
 
             # Verify all messages echoed back correctly and in order.
             for i, data in enumerate(received):

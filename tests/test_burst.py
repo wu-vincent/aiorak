@@ -37,7 +37,7 @@ async def test_burst_reliable_ordered(server_factory, client_factory, msg_size, 
 
     # Send all messages as fast as possible (burst).
     for msg in messages:
-        await client.send(msg, reliability=aiorak.Reliability.RELIABLE_ORDERED)
+        client.send(msg, reliability=aiorak.Reliability.RELIABLE_ORDERED)
 
     # Collect all echoed responses.
     responses = await collect_packets(client, msg_count, timeout=10.0)

@@ -70,7 +70,7 @@ async def test_comprehensive_stress(server_factory):
                     size = random.randint(1, 512)
                     data = os.urandom(size)
                     try:
-                        await clients[idx].send(
+                        clients[idx].send(
                             data,
                             reliability=aiorak.Reliability.RELIABLE_ORDERED,
                         )

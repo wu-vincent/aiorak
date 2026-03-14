@@ -19,7 +19,7 @@ async def server_factory():
 
     async def _default_handler(conn: Connection):
         async for data in conn:
-            await conn.send(data)
+            conn.send(data)
 
     async def _make(
         handler: Callable[[Connection], Awaitable[None]] | None = None,

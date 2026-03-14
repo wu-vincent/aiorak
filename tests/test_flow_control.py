@@ -21,7 +21,7 @@ def _make_relay_handler():
             async for data in conn:
                 for addr, other in list(connections.items()):
                     if addr != conn.address:
-                        await other.send(data)
+                        other.send(data)
         finally:
             connections.pop(conn.address, None)
 
@@ -51,7 +51,7 @@ async def test_relayed_data_arrives(server_factory, client_factory):
         deadline = asyncio.get_event_loop().time() + duration
         while asyncio.get_event_loop().time() < deadline:
             payload = struct.pack(">I", send_count) + b"\x00" * (packet_size - 4)
-            await sender.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
+            sender.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
             send_count += 1
             await asyncio.sleep(interval)
 
@@ -96,7 +96,7 @@ async def test_variable_packet_sizes(server_factory, client_factory):
             deadline = asyncio.get_event_loop().time() + duration_per_size
             while asyncio.get_event_loop().time() < deadline:
                 payload = struct.pack(">HI", packet_size, send_count) + b"\xab" * (packet_size - 6)
-                await sender.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
+                sender.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
                 send_count += 1
                 await asyncio.sleep(interval)
 

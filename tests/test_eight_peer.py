@@ -56,7 +56,7 @@ async def test_eight_peer_broadcast(server_factory, client_factory):
             async for data in conn:
                 for addr, other in list(clients.items()):
                     if addr != conn.address:
-                        await other.send(data)
+                        other.send(data)
         finally:
             clients.pop(conn.address, None)
 
@@ -80,21 +80,19 @@ async def test_eight_peer_broadcast(server_factory, client_factory):
     recv_counts: list[int] = [0] * NUM_CLIENTS
 
     async def receiver(client_idx: int, client: aiorak.Client):
-        while recv_counts[client_idx] < EXPECTED_PER_CLIENT:
-            try:
-                data = await asyncio.wait_for(client.recv(), timeout=30.0)
-            except asyncio.TimeoutError:
-                break
+        async for data in client:
             sender_id = data[0]
             (seq,) = struct.unpack_from(">I", data, 1)
             received[client_idx][sender_id].append(seq)
             recv_counts[client_idx] += 1
+            if recv_counts[client_idx] >= EXPECTED_PER_CLIENT:
+                break
 
     # -- sender logic -----------------------------------------------------
     async def sender(client_idx: int, client: aiorak.Client):
         for seq in range(MESSAGES_PER_CLIENT):
             payload = bytes([client_idx]) + struct.pack(">I", seq) + PADDING
-            await client.send(
+            client.send(
                 payload,
                 reliability=aiorak.Reliability.RELIABLE_ORDERED,
                 channel=0,

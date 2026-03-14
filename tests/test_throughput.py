@@ -24,7 +24,7 @@ async def _send_packets(client: aiorak.Client, reliability: aiorak.Reliability):
     deadline = asyncio.get_event_loop().time() + DURATION
     while sent < PACKET_COUNT and asyncio.get_event_loop().time() < deadline:
         payload = struct.pack(">I", sent) + b"\xcc" * (PACKET_SIZE - 4)
-        await client.send(payload, reliability=reliability)
+        client.send(payload, reliability=reliability)
         sent += 1
         await asyncio.sleep(SEND_INTERVAL)
     return sent

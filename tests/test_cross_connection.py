@@ -77,12 +77,12 @@ async def test_cross_connect_disconnect_cycle(server_factory):
     async def _handler_a(conn):
         async for data in conn:
             received_a.append(data)
-            await conn.send(data)
+            conn.send(data)
 
     async def _handler_b(conn):
         async for data in conn:
             received_b.append(data)
-            await conn.send(data)
+            conn.send(data)
 
     server_a = await server_factory(handler=_handler_a, max_connections=4)
     server_b = await server_factory(handler=_handler_b, max_connections=4)
@@ -107,12 +107,18 @@ async def test_cross_connect_disconnect_cycle(server_factory):
             msg_a = f"hello from A cycle {cycle}".encode()
             msg_b = f"hello from B cycle {cycle}".encode()
 
-            await client_a.send(msg_a, reliability=aiorak.Reliability.RELIABLE_ORDERED)
-            await client_b.send(msg_b, reliability=aiorak.Reliability.RELIABLE_ORDERED)
+            client_a.send(msg_a, reliability=aiorak.Reliability.RELIABLE_ORDERED)
+            client_b.send(msg_b, reliability=aiorak.Reliability.RELIABLE_ORDERED)
 
             # Receive echoed responses.
-            echo_a = await asyncio.wait_for(client_a.recv(), timeout=3.0)
-            echo_b = await asyncio.wait_for(client_b.recv(), timeout=3.0)
+            async def _recv(client):
+                async for data in client:
+                    return data
+
+            echo_a, echo_b = await asyncio.gather(
+                asyncio.wait_for(_recv(client_a), timeout=3.0),
+                asyncio.wait_for(_recv(client_b), timeout=3.0),
+            )
 
             assert echo_a == msg_a, f"Cycle {cycle}: client A expected {msg_a!r}, got {echo_a!r}"
             assert echo_b == msg_b, f"Cycle {cycle}: client B expected {msg_b!r}, got {echo_b!r}"
