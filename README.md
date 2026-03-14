@@ -30,7 +30,7 @@ import aiorak
 async def handler(conn: aiorak.Connection):
     print(f"{conn.address} connected")
     async for data in conn:
-        await conn.send(data)  # echo
+        conn.send(data)  # echo
     print(f"{conn.address} disconnected")
 
 server = await aiorak.create_server(("0.0.0.0", 19132), handler, max_connections=64)
@@ -43,7 +43,7 @@ await server.serve_forever()
 import aiorak
 
 client = await aiorak.connect(("127.0.0.1", 19132))
-await client.send(b"hello", reliability=aiorak.Reliability.RELIABLE_ORDERED)
+client.send(b"hello", reliability=aiorak.Reliability.RELIABLE_ORDERED)
 async for data in client:
     print("Got:", data)
 ```
