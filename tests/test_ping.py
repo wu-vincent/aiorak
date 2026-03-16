@@ -55,9 +55,9 @@ async def test_multiple_pings(server_factory):
 
 @pytest.mark.timeout(10)
 async def test_ping_timeout():
-    """Pinging a non-existent address should raise TimeoutError."""
+    """Pinging a non-existent address should raise RakNetTimeoutError."""
     # Use a port that is almost certainly not running a RakNet server.
     unreachable_addr = ("127.0.0.1", 19)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(aiorak.RakNetTimeoutError):
         await aiorak.ping(unreachable_addr, timeout=1.0)

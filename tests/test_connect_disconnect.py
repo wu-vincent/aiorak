@@ -130,7 +130,7 @@ async def test_incompatible_protocol_version(server_factory):
     server = await server_factory(handler=_noop_handler)
     addr = server.address
 
-    with pytest.raises(ConnectionRefusedError):
+    with pytest.raises(aiorak.ConnectionRejectedError):
         await aiorak.connect(addr, timeout=1.0, protocol_version=99)
 
     # Server should have no connected peers

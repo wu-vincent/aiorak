@@ -37,7 +37,14 @@ from collections.abc import Awaitable, Callable
 
 from ._client import Client
 from ._connection import Connection
-from ._exceptions import ConnectionClosedError, HandshakeError, ProtocolError, RakNetError
+from ._exceptions import (
+    ConnectionClosedError,
+    ConnectionRejectedError,
+    HandshakeError,
+    ProtocolError,
+    RakNetError,
+    RakNetTimeoutError,
+)
 from ._server import Server
 from ._types import PingResponse, Priority, Reliability
 
@@ -48,12 +55,14 @@ __all__ = [
     "Client",
     "Connection",
     "ConnectionClosedError",
+    "ConnectionRejectedError",
     "HandshakeError",
     "Server",
     "PingResponse",
     "Priority",
     "ProtocolError",
     "RakNetError",
+    "RakNetTimeoutError",
     "Reliability",
     "create_server",
     "connect",
@@ -154,8 +163,10 @@ async def connect(
         A connected :class:`Client` instance.
 
     Raises:
-        asyncio.TimeoutError: If the handshake does not complete within
+        RakNetTimeoutError: If the handshake does not complete within
             *timeout* seconds.
+        ConnectionRejectedError: If the server explicitly rejects the
+            connection.
 
     Example::
 
@@ -200,7 +211,7 @@ async def ping(
         and any custom offline data.
 
     Raises:
-        asyncio.TimeoutError: If no pong is received within *timeout*.
+        RakNetTimeoutError: If no pong is received within *timeout*.
 
     Example::
 
@@ -273,7 +284,7 @@ async def ping(
         try:
             return await result_future
         except asyncio.CancelledError:
-            raise TimeoutError() from None
+            raise RakNetTimeoutError("Ping timed out") from None
         finally:
             timeout_handle.cancel()
     finally:

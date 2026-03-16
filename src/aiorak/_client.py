@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator
 
 from ._connection import Connection, ConnectionState, _Signal
 from ._constants import MAXIMUM_MTU, MINIMUM_MTU, NUMBER_OF_INTERNAL_IDS, RAKNET_PROTOCOL_VERSION
+from ._exceptions import ConnectionRejectedError, HandshakeError, RakNetTimeoutError
 from ._transport import RakNetTransport, UDPSocket
 from ._types import Priority, Reliability
 
@@ -79,8 +80,10 @@ class Client:
             timeout: Maximum seconds to wait for the handshake to complete.
 
         Raises:
-            asyncio.TimeoutError: If the handshake does not complete in time.
-            OSError: If the socket cannot be created.
+            RakNetTimeoutError: If the handshake does not complete in time.
+            HandshakeError: If the handshake fails due to a transport error.
+            ConnectionRejectedError: If the server explicitly rejects the
+                connection.
         """
         loop = asyncio.get_running_loop()
         transport, _protocol = await loop.create_datagram_endpoint(
@@ -115,7 +118,10 @@ class Client:
         self._update_task = asyncio.create_task(self._update_loop())
 
         # Wait for connection to be established
-        await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
+        try:
+            await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise RakNetTimeoutError("Handshake timed out") from None
         if self._connect_error is not None:
             raise self._connect_error
         logger.debug("Connected to %s", self._remote_address)
@@ -256,7 +262,7 @@ class Client:
         for the full timeout.
         """
         if not self._connected_event.is_set():
-            self._connect_error = OSError(str(exc))
+            self._connect_error = HandshakeError(str(exc))
             self._connected_event.set()  # unblock connect()
 
     def _on_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
@@ -273,7 +279,7 @@ class Client:
                 self._connected_event.set()
             elif signal == _Signal.DISCONNECT:
                 if not self._connected_event.is_set():
-                    self._connect_error = ConnectionRefusedError(
+                    self._connect_error = ConnectionRejectedError(
                         f"Connection rejected by server (ID {sig_data[0] if sig_data else '?'})"
                     )
                     self._connected_event.set()

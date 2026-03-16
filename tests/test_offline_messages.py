@@ -53,7 +53,7 @@ async def test_ping_only_if_open_full_server(server_factory, client_factory):
     await client_factory(addr)
     await wait_for_peers(server, 1)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(aiorak.RakNetTimeoutError):
         await aiorak.ping(addr, timeout=2.0, only_if_open=True)
 
 

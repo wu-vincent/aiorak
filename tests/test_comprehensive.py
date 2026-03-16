@@ -59,7 +59,7 @@ async def test_comprehensive_stress(server_factory):
                         cli = await aiorak.connect(addr, timeout=3.0)
                         clients[idx] = cli
                         drain_tasks[idx] = asyncio.create_task(_drain(cli))
-                    except (asyncio.TimeoutError, OSError):
+                    except aiorak.RakNetError:
                         pass
 
             elif roll < 0.30:
@@ -109,7 +109,7 @@ async def test_comprehensive_stress(server_factory):
                 # --- Offline ping (5%) ---
                 try:
                     await aiorak.ping(addr, timeout=1.0)
-                except (asyncio.TimeoutError, OSError):
+                except aiorak.RakNetTimeoutError:
                     pass
 
             else:

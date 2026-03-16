@@ -122,7 +122,7 @@ async def test_random_disconnect_reconnect(server_factory, client_factory):
             try:
                 new_cli = await aiorak.connect(addr, timeout=3.0)
                 clients[idx] = new_cli
-            except (asyncio.TimeoutError, OSError):
+            except aiorak.RakNetError:
                 pass  # Server may still be processing the drop
 
         await asyncio.sleep(random.uniform(0.05, 0.3))

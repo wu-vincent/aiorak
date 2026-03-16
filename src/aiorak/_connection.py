@@ -49,6 +49,7 @@ from ._constants import (
     RAKNET_PROTOCOL_VERSION,
     UDP_HEADER_SIZE,
 )
+from ._exceptions import ConnectionClosedError
 from ._reliability import ReliabilityLayer
 from ._types import Priority, Reliability
 
@@ -197,10 +198,10 @@ class Connection:
             priority: Send-queue priority level.
 
         Raises:
-            RuntimeError: If the connection is not in the ``CONNECTED`` state.
+            ConnectionClosedError: If the connection is not in the ``CONNECTED`` state.
         """
         if self._closed:
-            raise RuntimeError("Connection is closed")
+            raise ConnectionClosedError("Connection is closed")
         self._send(data, reliability, channel, priority)
 
     async def close(self) -> None:
@@ -245,10 +246,10 @@ class Connection:
             priority: Send-queue priority level.
 
         Raises:
-            RuntimeError: If the connection is not in the ``CONNECTED`` state.
+            ConnectionClosedError: If the connection is not in the ``CONNECTED`` state.
         """
         if self.state != ConnectionState.CONNECTED:
-            raise RuntimeError(f"Cannot send: connection is {self.state.name}")
+            raise ConnectionClosedError(f"Cannot send: connection is {self.state.name}")
         self._reliability.send(data, reliability, channel, priority)
 
     @property
