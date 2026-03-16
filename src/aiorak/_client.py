@@ -20,7 +20,7 @@ from collections.abc import AsyncIterator
 
 from ._connection import Connection, ConnectionState, _Signal
 from ._constants import MAXIMUM_MTU, MINIMUM_MTU, NUMBER_OF_INTERNAL_IDS, RAKNET_PROTOCOL_VERSION
-from ._exceptions import ConnectionRejectedError, HandshakeError, RakNetTimeoutError
+from ._exceptions import ConnectionRejectedError, RakNetTimeoutError
 from ._transport import RakNetTransport, UDPSocket
 from ._types import Priority, Reliability
 
@@ -81,7 +81,6 @@ class Client:
 
         Raises:
             RakNetTimeoutError: If the handshake does not complete in time.
-            HandshakeError: If the handshake fails due to a transport error.
             ConnectionRejectedError: If the server explicitly rejects the
                 connection.
         """
@@ -258,12 +257,11 @@ class Client:
     def _on_transport_error(self, exc: Exception) -> None:
         """Callback for UDP transport errors (e.g. ICMP unreachable).
 
-        During handshake, this fails the connect fast instead of waiting
-        for the full timeout.
+        Transport errors during the handshake phase are logged but otherwise
+        ignored so that the handshake timeout fires consistently on all
+        platforms (Windows receives ICMP unreachable while other OS's don't).
         """
-        if not self._connected_event.is_set():
-            self._connect_error = HandshakeError(str(exc))
-            self._connected_event.set()  # unblock connect()
+        logger.debug("Transport error (ignored): %s", exc)
 
     def _on_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
         """Callback for incoming UDP datagrams."""

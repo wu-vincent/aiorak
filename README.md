@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/aiorak)](https://pypi.org/project/aiorak/)
 [![Python](https://img.shields.io/pypi/pyversions/aiorak)](https://pypi.org/project/aiorak/)
 [![CI](https://github.com/wu-vincent/aiorak/actions/workflows/ci.yml/badge.svg)](https://github.com/wu-vincent/aiorak/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/wu-vincent/aiorak/branch/main/graph/badge.svg)](https://codecov.io/gh/wu-vincent/aiorak)
+[![codecov](https://codecov.io/github/wu-vincent/aiorak/graph/badge.svg?token=OM83DGNWDF)](https://codecov.io/github/wu-vincent/aiorak)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 [RakNet](http://www.jenkinssoftware.com/) reliable UDP implementation for Python asyncio, written from scratch using the C++ source as reference.
