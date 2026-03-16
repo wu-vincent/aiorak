@@ -147,8 +147,10 @@ class Server:
         self._ip_connection_times: dict[str, float] = {}
         self._peers: dict[tuple[str, int], Connection] = {}
         self._handler_tasks: dict[tuple[str, int], asyncio.Task[None]] = {}
-        self._socket: UDPSocket | None = None
-        self._update_task: asyncio.Task[None] | None = None
+        # Set by start(), always non-None after create_server() returns.
+        self._socket: UDPSocket
+        self._update_task: asyncio.Task[None]
+        self._bound_port: int
         self._closed = False
         self._closed_event: asyncio.Event = asyncio.Event()
         self._offline_ping_response: bytes = b""
@@ -209,18 +211,16 @@ class Server:
                 conn.disconnect()
 
             # Let the update loop flush disconnect notifications.
-            if self._update_task is not None:
-                try:
-                    await asyncio.wait_for(self._drain_all(), timeout=1.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    pass
-
-        if self._update_task is not None:
-            self._update_task.cancel()
             try:
-                await self._update_task
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self._drain_all(), timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
+
+        self._update_task.cancel()
+        try:
+            await self._update_task
+        except asyncio.CancelledError:
+            pass
 
         # Signal handlers and clean up
         for addr, conn in list(self._peers.items()):
@@ -236,8 +236,7 @@ class Server:
         self._connections.clear()
         self._guid_to_addr.clear()
         self._ip_connection_times.clear()
-        if self._socket is not None:
-            self._socket.close()
+        self._socket.close()
         self._closed_event.set()
 
     async def _drain_all(self) -> None:
@@ -273,9 +272,7 @@ class Server:
     @property
     def address(self) -> tuple[str, int]:
         """The actual ``(host, port)`` the server socket is bound to."""
-        if self._socket is not None:
-            return self._socket.address
-        return self._address
+        return self._socket.address
 
     @property
     def timeout(self) -> float:
@@ -627,8 +624,7 @@ class Server:
 
     def _send_raw(self, data: bytes, addr: tuple[str, int]) -> None:
         """Send raw bytes over the UDP socket."""
-        if self._socket is not None:
-            self._socket.send_to(data, addr)
+        self._socket.send_to(data, addr)
 
     # ------------------------------------------------------------------
     # Internal: update loop
