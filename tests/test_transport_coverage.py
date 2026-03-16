@@ -1,0 +1,106 @@
+"""Tests for _transport.py platform-specific socket options and edge cases."""
+
+import socket
+from unittest.mock import MagicMock, patch
+
+from aiorak._transport import RakNetTransport
+
+
+class TestConnectionMade:
+    def _make_protocol(self):
+        return RakNetTransport(on_datagram=lambda data, addr: None)
+
+    def test_connection_made_no_socket(self):
+        """transport.get_extra_info('socket') returns None → early return."""
+        proto = self._make_protocol()
+        mock_transport = MagicMock()
+        mock_transport.get_extra_info.return_value = None
+        proto.connection_made(mock_transport)
+        # Should not raise
+
+    def test_connection_made_rcvbuf_oserror(self):
+        """setsockopt raises OSError on SO_RCVBUF → caught silently."""
+        proto = self._make_protocol()
+        mock_transport = MagicMock()
+        mock_sock = MagicMock()
+
+        def setsockopt_side_effect(level, optname, value):
+            if optname == socket.SO_RCVBUF:
+                raise OSError("permission denied")
+
+        mock_sock.setsockopt = MagicMock(side_effect=setsockopt_side_effect)
+        mock_transport.get_extra_info.return_value = mock_sock
+        proto.connection_made(mock_transport)
+        # Should not raise
+
+    def test_connection_made_broadcast_oserror(self):
+        """setsockopt raises OSError on SO_BROADCAST → caught silently."""
+        proto = self._make_protocol()
+        mock_transport = MagicMock()
+        mock_sock = MagicMock()
+
+        def setsockopt_side_effect(level, optname, value):
+            if optname == socket.SO_BROADCAST:
+                raise OSError("not supported")
+
+        mock_sock.setsockopt = MagicMock(side_effect=setsockopt_side_effect)
+        mock_transport.get_extra_info.return_value = mock_sock
+        proto.connection_made(mock_transport)
+
+    @patch("aiorak._transport.sys")
+    def test_connection_made_windows_dontfragment(self, mock_sys):
+        """On win32, IP_DONTFRAGMENT is set."""
+        mock_sys.platform = "win32"
+        proto = self._make_protocol()
+        mock_transport = MagicMock()
+        mock_sock = MagicMock()
+        mock_transport.get_extra_info.return_value = mock_sock
+        proto.connection_made(mock_transport)
+        # Verify setsockopt was called with IPPROTO_IP and the dontfragment option
+        calls = mock_sock.setsockopt.call_args_list
+        ip_calls = [c for c in calls if c[0][0] == socket.IPPROTO_IP]
+        assert len(ip_calls) >= 1
+
+    @patch("aiorak._transport.sys")
+    def test_connection_made_linux_mtu_discover(self, mock_sys):
+        """On linux, IP_MTU_DISCOVER is set."""
+        mock_sys.platform = "linux"
+        proto = self._make_protocol()
+        mock_transport = MagicMock()
+        mock_sock = MagicMock()
+        mock_transport.get_extra_info.return_value = mock_sock
+        proto.connection_made(mock_transport)
+        calls = mock_sock.setsockopt.call_args_list
+        ip_calls = [c for c in calls if c[0][0] == socket.IPPROTO_IP]
+        assert len(ip_calls) >= 1
+
+    @patch("aiorak._transport.sys")
+    def test_connection_made_darwin_dontfrag(self, mock_sys):
+        """On darwin, IP_DONTFRAG is set."""
+        mock_sys.platform = "darwin"
+        proto = self._make_protocol()
+        mock_transport = MagicMock()
+        mock_sock = MagicMock()
+        mock_transport.get_extra_info.return_value = mock_sock
+        proto.connection_made(mock_transport)
+        calls = mock_sock.setsockopt.call_args_list
+        ip_calls = [c for c in calls if c[0][0] == socket.IPPROTO_IP]
+        assert len(ip_calls) >= 1
+
+    @patch("aiorak._transport.sys")
+    def test_platform_specific_oserror(self, mock_sys):
+        """Each platform's OSError catch path for platform-specific option."""
+        for platform in ("win32", "linux", "darwin"):
+            mock_sys.platform = platform
+            proto = self._make_protocol()
+            mock_transport = MagicMock()
+            mock_sock = MagicMock()
+
+            def setsockopt_side_effect(level, optname, value):
+                if level == socket.IPPROTO_IP:
+                    raise OSError("not supported")
+
+            mock_sock.setsockopt = MagicMock(side_effect=setsockopt_side_effect)
+            mock_transport.get_extra_info.return_value = mock_sock
+            proto.connection_made(mock_transport)
+            # Should not raise
