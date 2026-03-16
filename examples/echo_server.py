@@ -7,10 +7,10 @@ import aiorak
 
 
 async def handler(conn: aiorak.Connection):
-    print(f"[+] {conn.address[0]}:{conn.address[1]} connected")
+    print(f"[+] {conn.remote_address[0]}:{conn.remote_address[1]} connected")
     async for data in conn:
         await conn.send(data)
-    print(f"[-] {conn.address[0]}:{conn.address[1]} disconnected")
+    print(f"[-] {conn.remote_address[0]}:{conn.remote_address[1]} disconnected")
 
 
 async def main():
@@ -20,7 +20,7 @@ async def main():
     args = parser.parse_args()
 
     server = await aiorak.create_server(("0.0.0.0", args.port), handler, max_connections=args.max_connections)
-    print(f"Echo server listening on {server.local_address}")
+    print(f"Echo server listening on {server.address}")
 
     try:
         await server.serve_forever()

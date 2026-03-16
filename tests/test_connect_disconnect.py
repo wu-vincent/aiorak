@@ -51,7 +51,7 @@ async def test_connect_disconnect_cycles(server_factory):
             pass
 
     server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS + 4)
-    addr = server.local_address
+    addr = server.address
 
     for cycle in range(NUM_CYCLES):
         # Connect all clients.
@@ -90,7 +90,7 @@ async def test_rapid_connect_disconnect(server_factory):
             pass
 
     server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS + 4)
-    addr = server.local_address
+    addr = server.address
 
     deadline = time.monotonic() + 5.0
     iterations = 0
@@ -128,7 +128,7 @@ async def test_incompatible_protocol_version(server_factory):
             pass
 
     server = await server_factory(handler=_noop_handler)
-    addr = server.local_address
+    addr = server.address
 
     with pytest.raises(ConnectionRefusedError):
         await aiorak.connect(addr, timeout=1.0, protocol_version=99)
@@ -158,7 +158,7 @@ async def test_cancelled_connect(server_factory):
             pass
 
     server = await server_factory(handler=_noop_handler, max_connections=4)
-    addr = server.local_address
+    addr = server.address
 
     # Start connecting, then cancel immediately.
     async def _connect_and_cancel():

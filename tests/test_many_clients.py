@@ -53,7 +53,7 @@ async def _close_all(clients):
 async def test_initial_connect(server_factory):
     """32 clients connect to a server and all are accepted."""
     server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS + 10)
-    addr = server.local_address
+    addr = server.address
 
     clients = await _connect_all(addr, NUM_CLIENTS)
     try:
@@ -71,7 +71,7 @@ async def test_disconnect_reconnect_cycle(server_factory):
     cleans up peers promptly (no need to wait for the 10 s timeout).
     """
     server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS * 4)
-    addr = server.local_address
+    addr = server.address
 
     clients = await _connect_all(addr, NUM_CLIENTS)
     await wait_for_peers(server, NUM_CLIENTS, timeout=10.0)
@@ -130,7 +130,7 @@ async def test_abrupt_disconnect(server_factory):
     """
     server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS * 4)
     _disable_udp_connreset(server)
-    addr = server.local_address
+    addr = server.address
 
     clients = await _connect_all(addr, NUM_CLIENTS)
     await wait_for_peers(server, NUM_CLIENTS, timeout=10.0)
@@ -165,7 +165,7 @@ async def test_abrupt_disconnect(server_factory):
 async def test_rapid_churn(server_factory):
     """16 clients rapidly close and reconnect for 3 seconds, then verify."""
     server = await server_factory(handler=_noop_handler, max_connections=CHURN_CLIENTS + 10)
-    addr = server.local_address
+    addr = server.address
 
     clients = await _connect_all(addr, CHURN_CLIENTS)
     await wait_for_peers(server, CHURN_CLIENTS, timeout=10.0)

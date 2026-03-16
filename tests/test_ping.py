@@ -18,7 +18,7 @@ async def test_offline_ping(server_factory):
     """
     server = await server_factory()
     server.set_offline_ping_response(CUSTOM_PONG_DATA)
-    addr = server.local_address
+    addr = server.address
 
     response = await aiorak.ping(addr, timeout=3.0)
 
@@ -38,7 +38,7 @@ async def test_multiple_pings(server_factory):
     """
     server = await server_factory()
     server.set_offline_ping_response(CUSTOM_PONG_DATA)
-    addr = server.local_address
+    addr = server.address
 
     latencies = []
     for _ in range(5):

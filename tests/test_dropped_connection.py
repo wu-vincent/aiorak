@@ -37,7 +37,7 @@ async def test_server_detects_client_gone(server_factory, client_factory):
 
     server = await server_factory(max_connections=num_clients)
     server.timeout = 2.0
-    addr = server.local_address
+    addr = server.address
 
     clients = []
     for _ in range(num_clients):
@@ -68,7 +68,7 @@ async def test_client_detects_server_gone(server_factory, client_factory):
     Mirrors the server-side equivalent of CloseConnection with no notification.
     """
     server = await server_factory()
-    addr = server.local_address
+    addr = server.address
     client = await client_factory(addr)
     client.timeout = 2.0
 
@@ -94,7 +94,7 @@ async def test_random_disconnect_reconnect(server_factory, client_factory):
     """
     num_slots = 5
     server = await server_factory(max_connections=num_slots + 2)
-    addr = server.local_address
+    addr = server.address
 
     clients: list[aiorak.Client | None] = []
     for _ in range(num_slots):

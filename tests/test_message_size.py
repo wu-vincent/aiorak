@@ -25,7 +25,7 @@ async def test_message_size(server_factory, client_factory, stride: int):
 
     # Server uses the default echo handler (no handler argument needed).
     server = await server_factory()
-    addr = server.local_address
+    addr = server.address
     client = await client_factory(addr)
 
     # Build and send all messages.

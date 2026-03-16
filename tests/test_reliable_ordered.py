@@ -21,7 +21,7 @@ async def test_reliable_ordered_multi_channel(server_factory, client_factory):
     """Send packets on 32 channels with RELIABLE_ORDERED and verify that
     per-channel ordering is preserved after the server echoes them back."""
     server = await server_factory()
-    client = await client_factory(server.local_address)
+    client = await client_factory(server.address)
 
     # Send packets: 50 rounds, each round sends one packet on every channel.
     for seq in range(PACKETS_PER_CHANNEL):

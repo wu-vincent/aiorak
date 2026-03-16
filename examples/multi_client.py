@@ -56,7 +56,7 @@ async def main():
 
     # Start echo server on ephemeral port
     server = await aiorak.create_server(("0.0.0.0", 0), handler, max_connections=args.clients + 1)
-    host, port = "127.0.0.1", server.local_address[1]
+    host, port = "127.0.0.1", server.address[1]
     print(f"Server on :{port}, launching {args.clients} clients x {args.messages} messages")
 
     t0 = time.monotonic()

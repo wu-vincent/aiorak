@@ -50,7 +50,7 @@ from ._constants import (
     UDP_HEADER_SIZE,
 )
 from ._reliability import ReliabilityLayer
-from ._types import Reliability
+from ._types import Priority, Reliability
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ class Connection:
         mtu_discovery_sizes: tuple[int, ...] | None = None,
         num_internal_ids: int = NUMBER_OF_INTERNAL_IDS,
     ) -> None:
-        self.address = address
+        self.remote_address = address
         self.guid = guid
         self.remote_guid: int = 0
         self.is_server = is_server
@@ -147,7 +147,7 @@ class Connection:
         self._min_mtu = min_mtu
         self._mtu_discovery_sizes = mtu_discovery_sizes if mtu_discovery_sizes is not None else (max_mtu, 1200, 576)
         self._num_internal_ids = num_internal_ids
-        self._local_port: int = 0
+        self._port: int = 0
 
         self._cc = CongestionController(mtu)
         self._reliability = ReliabilityLayer(mtu, self._cc, timeout=timeout)
@@ -174,24 +174,34 @@ class Connection:
         self._packet_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._closed = False
 
+    def __repr__(self) -> str:
+        return f"<Connection remote_address={self.remote_address!r} state={self.state.name}>"
+
     # ------------------------------------------------------------------
     # Public async interface
     # ------------------------------------------------------------------
 
-    def send(self, data: bytes, reliability: Reliability = Reliability.RELIABLE_ORDERED, channel: int = 0) -> None:
+    def send(
+        self,
+        data: bytes,
+        reliability: Reliability = Reliability.RELIABLE_ORDERED,
+        channel: int = 0,
+        priority: Priority = Priority.MEDIUM,
+    ) -> None:
         """Send a message to this peer.
 
         Args:
             data: Raw payload bytes.
             reliability: Delivery guarantee.
             channel: Ordering channel (0–31).
+            priority: Send-queue priority level.
 
         Raises:
             RuntimeError: If the connection is not in the ``CONNECTED`` state.
         """
         if self._closed:
             raise RuntimeError("Connection is closed")
-        self._send(data, reliability, channel)
+        self._send(data, reliability, channel, priority)
 
     async def close(self) -> None:
         """Disconnect this peer."""
@@ -219,20 +229,27 @@ class Connection:
     # Internal send
     # ------------------------------------------------------------------
 
-    def _send(self, data: bytes, reliability: Reliability = Reliability.RELIABLE_ORDERED, channel: int = 0) -> None:
+    def _send(
+        self,
+        data: bytes,
+        reliability: Reliability = Reliability.RELIABLE_ORDERED,
+        channel: int = 0,
+        priority: Priority = Priority.MEDIUM,
+    ) -> None:
         """Enqueue user data for transmission (sync, internal).
 
         Args:
             data: Raw payload bytes.
             reliability: Delivery guarantee.
             channel: Ordering channel (0–31).
+            priority: Send-queue priority level.
 
         Raises:
             RuntimeError: If the connection is not in the ``CONNECTED`` state.
         """
         if self.state != ConnectionState.CONNECTED:
             raise RuntimeError(f"Cannot send: connection is {self.state.name}")
-        self._reliability.send(data, reliability, channel)
+        self._reliability.send(data, reliability, channel, priority)
 
     @property
     def has_pending_data(self) -> bool:
@@ -287,7 +304,7 @@ class Connection:
 
             # Offline rejection packets (e.g. incompatible protocol version)
             if not self.is_server and len(data) >= 1 and data[0] in self._OFFLINE_REJECTION_IDS:
-                logger.warning("Connection to %s rejected: message ID %d", self.address, data[0])
+                logger.warning("Connection to %s rejected: message ID %d", self.remote_address, data[0])
                 self._events.append((_Signal.DISCONNECT, data))
                 self.state = ConnectionState.DISCONNECTED
                 return outgoing
@@ -326,13 +343,13 @@ class Connection:
         if self.state == ConnectionState.CONNECTING:
             # C++ reuses defaultTimeoutTime for the handshake check (RakPeer.cpp:5877-5881).
             if self._handshake_start > 0 and now - self._handshake_start > self.timeout:
-                logger.warning("Handshake with %s timed out after %.1fs", self.address, self.timeout)
+                logger.warning("Handshake with %s timed out after %.1fs", self.remote_address, self.timeout)
                 self._events.append((_Signal.DISCONNECT, b""))
                 self.state = ConnectionState.DISCONNECTED
                 return outgoing
         elif self.state in (ConnectionState.CONNECTED, ConnectionState.DISCONNECTING):
             if self._last_recv_time > 0 and now - self._last_recv_time > self.timeout:
-                logger.warning("Connection to %s timed out after %.1fs", self.address, self.timeout)
+                logger.warning("Connection to %s timed out after %.1fs", self.remote_address, self.timeout)
                 self._events.append((_Signal.DISCONNECT, b""))
                 self.state = ConnectionState.DISCONNECTED
                 return outgoing
@@ -514,11 +531,13 @@ class Connection:
         bs.read_uint8()  # msg ID
         magic = bs.read_bytes(16)
         if magic != OFFLINE_MAGIC:
-            logger.warning("Open request 1 from %s: invalid magic", self.address)
+            logger.warning("Open request 1 from %s: invalid magic", self.remote_address)
             return None
         proto = bs.read_uint8()
         if proto != self._protocol_version:
-            logger.warning("Open request 1 from %s: protocol %d != %d", self.address, proto, self._protocol_version)
+            logger.warning(
+                "Open request 1 from %s: protocol %d != %d", self.remote_address, proto, self._protocol_version
+            )
             reject = BitStream()
             reject.write_uint8(ID_INCOMPATIBLE_PROTOCOL_VERSION)
             reject.write_uint8(self._protocol_version)
@@ -531,7 +550,7 @@ class Connection:
         incoming_mtu = min(len(data) + UDP_HEADER_SIZE, self._max_mtu)
 
         self.state = ConnectionState.CONNECTING
-        logger.debug("State -> CONNECTING for %s", self.address)
+        logger.debug("State -> CONNECTING for %s", self.remote_address)
         self._handshake_start = now
         self._last_recv_time = now
 
@@ -561,7 +580,7 @@ class Connection:
         bs.read_uint8()  # msg ID
         magic = bs.read_bytes(16)
         if magic != OFFLINE_MAGIC:
-            logger.warning("Open reply 1 from %s: invalid magic", self.address)
+            logger.warning("Open reply 1 from %s: invalid magic", self.remote_address)
             return None
         self.remote_guid = bs.read_uint64()
         has_security = bs.read_uint8()
@@ -570,7 +589,11 @@ class Connection:
         mtu = bs.read_uint16()
         if not (self._min_mtu <= mtu <= self._max_mtu):
             logger.warning(
-                "Open reply 1 from %s: MTU %d out of range [%d, %d]", self.address, mtu, self._min_mtu, self._max_mtu
+                "Open reply 1 from %s: MTU %d out of range [%d, %d]",
+                self.remote_address,
+                mtu,
+                self._min_mtu,
+                self._max_mtu,
             )
             return None
         self.mtu = mtu
@@ -584,7 +607,7 @@ class Connection:
         reply.write_uint8(ID_OPEN_CONNECTION_REQUEST_2)
         reply.write_bytes(OFFLINE_MAGIC)
         # Server binding address
-        reply.write_address(self.address[0], self.address[1])
+        reply.write_address(self.remote_address[0], self.remote_address[1])
         reply.write_uint16(mtu)
         reply.write_uint64(self.guid)
         return reply.get_data()
@@ -607,13 +630,17 @@ class Connection:
         bs.read_uint8()  # msg ID
         magic = bs.read_bytes(16)
         if magic != OFFLINE_MAGIC:
-            logger.warning("Open request 2 from %s: invalid magic", self.address)
+            logger.warning("Open request 2 from %s: invalid magic", self.remote_address)
             return None
         _server_addr = bs.read_address()
         mtu = bs.read_uint16()
         if not (self._min_mtu <= mtu <= self._max_mtu):
             logger.warning(
-                "Open request 2 from %s: MTU %d out of range [%d, %d]", self.address, mtu, self._min_mtu, self._max_mtu
+                "Open request 2 from %s: MTU %d out of range [%d, %d]",
+                self.remote_address,
+                mtu,
+                self._min_mtu,
+                self._max_mtu,
             )
             return None
         self.remote_guid = bs.read_uint64()
@@ -628,7 +655,7 @@ class Connection:
         reply.write_bytes(OFFLINE_MAGIC)
         reply.write_uint64(self.guid)
         # Client address
-        reply.write_address(self.address[0], self.address[1])
+        reply.write_address(self.remote_address[0], self.remote_address[1])
         reply.write_uint16(mtu)
         reply.write_bit(False)  # has_security = false (1 bit, matches C++ Write(bool))
         return reply.get_data()
@@ -749,13 +776,13 @@ class Connection:
         reply = BitStream()
         reply.write_uint8(ID_CONNECTION_REQUEST_ACCEPTED)
         # Client address
-        reply.write_address(self.address[0], self.address[1])
+        reply.write_address(self.remote_address[0], self.remote_address[1])
         # System index
         reply.write_uint16(self._system_index)
         local_ips = _get_local_addresses()
         for i in range(self._num_internal_ids):
             if i < len(local_ips):
-                reply.write_address(local_ips[i], self._local_port)
+                reply.write_address(local_ips[i], self._port)
             else:
                 reply.write_address("0.0.0.0", 0)
         # Timestamps: client's sent time + server time
@@ -788,17 +815,17 @@ class Connection:
         _reply_time = bs.read_int64()
 
         self.state = ConnectionState.CONNECTED
-        logger.debug("State -> CONNECTED for %s", self.address)
+        logger.debug("State -> CONNECTED for %s", self.remote_address)
         self._events.append((_Signal.CONNECT, b""))
 
         # Send ID_NEW_INCOMING_CONNECTION
         reply = BitStream()
         reply.write_uint8(ID_NEW_INCOMING_CONNECTION)
-        reply.write_address(self.address[0], self.address[1])
+        reply.write_address(self.remote_address[0], self.remote_address[1])
         local_ips = _get_local_addresses()
         for i in range(self._num_internal_ids):
             if i < len(local_ips):
-                reply.write_address(local_ips[i], self._local_port)
+                reply.write_address(local_ips[i], self._port)
             else:
                 reply.write_address("0.0.0.0", 0)
         reply.write_int64(_reply_time)
@@ -822,7 +849,7 @@ class Connection:
             send_ping_time = bs.read_int64()
             _send_pong_time = bs.read_int64()
         except (ValueError, IndexError):
-            logger.warning("Malformed ID_NEW_INCOMING_CONNECTION from %s, dropping", self.address)
+            logger.warning("Malformed ID_NEW_INCOMING_CONNECTION from %s, dropping", self.remote_address)
             return
 
         # Compute first RTT from the timestamps (C++ OnConnectedPong)
@@ -834,7 +861,7 @@ class Connection:
 
         self.state = ConnectionState.CONNECTED
         self._last_recv_time = now
-        logger.debug("State -> CONNECTED for %s", self.address)
+        logger.debug("State -> CONNECTED for %s", self.remote_address)
         self._events.append((_Signal.CONNECT, b""))
 
         # Send immediate ping on connect (C++ PingInternal after ID_NEW_INCOMING_CONNECTION)

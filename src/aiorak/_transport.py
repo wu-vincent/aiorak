@@ -153,7 +153,7 @@ class UDPSocket:
             self._transport.sendto(data, addr)
 
     @property
-    def local_address(self) -> tuple[str, int]:
+    def address(self) -> tuple[str, int]:
         """The local ``(host, port)`` this socket is bound to.
 
         Returns:

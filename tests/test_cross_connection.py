@@ -41,8 +41,8 @@ async def test_simultaneous_connect(server_factory):
 
     server_a = await server_factory(handler=_noop_handler, max_connections=4)
     server_b = await server_factory(handler=_noop_handler, max_connections=4)
-    addr_a = server_a.local_address
-    addr_b = server_b.local_address
+    addr_a = server_a.address
+    addr_b = server_b.address
 
     # Connect both directions simultaneously.
     client_a, client_b = await asyncio.gather(
@@ -86,8 +86,8 @@ async def test_cross_connect_disconnect_cycle(server_factory):
 
     server_a = await server_factory(handler=_handler_a, max_connections=4)
     server_b = await server_factory(handler=_handler_b, max_connections=4)
-    addr_a = server_a.local_address
-    addr_b = server_b.local_address
+    addr_a = server_a.address
+    addr_b = server_b.address
 
     for cycle in range(NUM_CYCLES):
         received_a.clear()

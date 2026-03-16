@@ -35,7 +35,7 @@ async def test_throughput_reliable_ordered(server_factory, client_factory):
     """Send 500 packets of 400 bytes with RELIABLE_ORDERED via echo server.
     All packets must be echoed back."""
     server = await server_factory()
-    client = await client_factory(server.local_address)
+    client = await client_factory(server.address)
 
     t_start = time.monotonic()
     sent = await _send_packets(client, aiorak.Reliability.RELIABLE_ORDERED)
@@ -63,7 +63,7 @@ async def test_throughput_reliable(server_factory, client_factory):
     """Send 500 packets of 400 bytes with RELIABLE via echo server.
     All packets must be echoed back (order not guaranteed)."""
     server = await server_factory()
-    client = await client_factory(server.local_address)
+    client = await client_factory(server.address)
 
     t_start = time.monotonic()
     sent = await _send_packets(client, aiorak.Reliability.RELIABLE)
@@ -87,7 +87,7 @@ async def test_throughput_unreliable(server_factory, client_factory):
     """Send 500 packets of 400 bytes with UNRELIABLE via echo server.
     At least 50% must arrive (loopback should be nearly lossless)."""
     server = await server_factory()
-    client = await client_factory(server.local_address)
+    client = await client_factory(server.address)
 
     t_start = time.monotonic()
     sent = await _send_packets(client, aiorak.Reliability.UNRELIABLE)

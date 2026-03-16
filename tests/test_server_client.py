@@ -34,7 +34,7 @@ async def test_all_clients_connect(server_factory):
             pass
 
     server = await server_factory(handler=_noop_handler, max_connections=NUM_CLIENTS_CONNECT + 10)
-    addr = server.local_address
+    addr = server.address
 
     # Connect all clients in parallel.
     clients = await asyncio.gather(*(aiorak.connect(addr, timeout=10.0) for _ in range(NUM_CLIENTS_CONNECT)))
@@ -53,7 +53,7 @@ async def test_bidirectional_data_flow(server_factory):
     After the data exchange, verify that no connections were lost.
     """
     server = await server_factory(max_connections=NUM_CLIENTS_DATA + 10)
-    addr = server.local_address
+    addr = server.address
 
     clients = await asyncio.gather(*(aiorak.connect(addr, timeout=5.0) for _ in range(NUM_CLIENTS_DATA)))
 

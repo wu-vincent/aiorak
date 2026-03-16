@@ -24,7 +24,7 @@ async def main():
 
     server = await aiorak.create_server(("0.0.0.0", args.port), _noop, max_connections=10)
     server.set_offline_ping_response(b"My Game Server v1.0")
-    actual_port = server.local_address[1]
+    actual_port = server.address[1]
     print(f"Ping server on :{actual_port}, sending {args.count} pings...")
 
     rtts = []

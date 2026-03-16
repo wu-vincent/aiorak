@@ -27,7 +27,7 @@ async def test_comprehensive_stress(server_factory):
     num_slots = 10
 
     server = await server_factory(max_connections=num_slots)
-    addr = server.local_address
+    addr = server.address
 
     # Pool of client slots - None means "not connected"
     clients: list[aiorak.Client | None] = [None] * num_slots

@@ -22,11 +22,11 @@ async def broadcast(data: bytes, *, exclude: tuple[str, int] | None = None):
 
 
 async def handler(conn: aiorak.Connection):
-    tag = f"{conn.address[0]}:{conn.address[1]}"
-    connections[conn.address] = conn
+    tag = f"{conn.remote_address[0]}:{conn.remote_address[1]}"
+    connections[conn.remote_address] = conn
     print(f"[+] {tag} joined ({len(connections)} online)")
     notice = ID_USER + f"*** {tag} joined the chat ***".encode()
-    await broadcast(notice, exclude=conn.address)
+    await broadcast(notice, exclude=conn.remote_address)
 
     try:
         async for data in conn:
@@ -35,9 +35,9 @@ async def handler(conn: aiorak.Connection):
             text = data[1:].decode(errors="replace")
             print(f"<{tag}> {text}")
             relay = ID_USER + f"<{tag}> {text}".encode()
-            await broadcast(relay, exclude=conn.address)
+            await broadcast(relay, exclude=conn.remote_address)
     finally:
-        connections.pop(conn.address, None)
+        connections.pop(conn.remote_address, None)
         print(f"[-] {tag} left ({len(connections)} online)")
         notice = ID_USER + f"*** {tag} left the chat ***".encode()
         await broadcast(notice)
@@ -50,7 +50,7 @@ async def main():
     args = parser.parse_args()
 
     server = await aiorak.create_server(("0.0.0.0", args.port), handler, max_connections=args.max_connections)
-    print(f"Chat server listening on {server.local_address}")
+    print(f"Chat server listening on {server.address}")
 
     try:
         await server.serve_forever()

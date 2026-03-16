@@ -29,7 +29,7 @@ async def _big_packet_test(
         conn.send(payload, reliability=aiorak.Reliability.RELIABLE_ORDERED)
 
     server = await server_factory(handler=handler)
-    addr = server.local_address
+    addr = server.address
     client = await client_factory(addr)
 
     async def _recv():

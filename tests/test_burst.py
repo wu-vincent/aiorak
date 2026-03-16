@@ -23,7 +23,7 @@ async def test_burst_reliable_ordered(server_factory, client_factory, msg_size, 
     """Send *msg_count* messages of *msg_size* bytes in a burst and verify
     that all echoed responses arrive in the correct order."""
     server = await server_factory()
-    client = await client_factory(server.local_address)
+    client = await client_factory(server.address)
 
     # Build messages: 1-byte ID (0x86) + 4-byte big-endian index + zero padding.
     header_len = 1 + 4  # ID byte + index

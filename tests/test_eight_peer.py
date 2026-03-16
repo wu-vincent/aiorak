@@ -51,21 +51,21 @@ async def test_eight_peer_broadcast(server_factory, client_factory):
     clients: dict[tuple[str, int], aiorak.Connection] = {}
 
     async def broadcast_handler(conn: aiorak.Connection):
-        clients[conn.address] = conn
+        clients[conn.remote_address] = conn
         try:
             async for data in conn:
                 for addr, other in list(clients.items()):
-                    if addr != conn.address:
+                    if addr != conn.remote_address:
                         other.send(data)
         finally:
-            clients.pop(conn.address, None)
+            clients.pop(conn.remote_address, None)
 
     # -- set up server and clients ----------------------------------------
     server = await server_factory(
         handler=broadcast_handler,
         max_connections=NUM_CLIENTS + 2,
     )
-    addr = server.local_address
+    addr = server.address
 
     peers: list[aiorak.Client] = []
     for _ in range(NUM_CLIENTS):

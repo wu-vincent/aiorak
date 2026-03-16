@@ -8,7 +8,7 @@ Example::
 
     async def handler(conn: aiorak.Connection):
         async for data in conn:
-            await conn.send(data)  # echo
+            conn.send(data)  # echo
 
     server = await aiorak.create_server(('0.0.0.0', 19132), handler)
     await server.serve_forever()
@@ -44,7 +44,7 @@ from ._constants import (
     UDP_HEADER_SIZE,
 )
 from ._transport import RakNetTransport, UDPSocket
-from ._types import Reliability
+from ._types import Priority, Reliability
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ class Server:
     """RakNet-compatible UDP server with per-peer handler coroutines.
 
     Args:
-        local_address: ``(host, port)`` to bind the UDP socket to.
+        address: ``(host, port)`` to bind the UDP socket to.
         handler: Async callable ``(Connection) -> None`` invoked for each new peer.
         max_connections: Maximum number of simultaneous peer connections.
         guid: 64-bit server GUID.  Generated randomly if not supplied.
@@ -117,7 +117,7 @@ class Server:
 
     def __init__(
         self,
-        local_address: tuple[str, int],
+        address: tuple[str, int],
         handler: Callable[[Connection], Awaitable[None]],
         max_connections: int = 64,
         guid: int | None = None,
@@ -128,7 +128,7 @@ class Server:
         timeout: float = DEFAULT_TIMEOUT,
         rate_limit_ips: bool = False,
     ) -> None:
-        self._local_address = local_address
+        self._address = address
         self._handler = handler
         self._max_connections = max_connections
         self._guid = guid if guid is not None else random.getrandbits(64)
@@ -165,13 +165,13 @@ class Server:
         on the server socket.  Without this, Python < 3.13's
         ProactorEventLoop stops receiving datagrams after an ICMP error.
         """
-        host, _port = self._local_address
+        host, _port = self._address
         family = _socket.AF_INET6 if ":" in host else _socket.AF_INET
         sock = _socket.socket(family, _socket.SOCK_DGRAM, _socket.IPPROTO_UDP)
         sock.setblocking(False)
         if sys.platform == "win32":
             _set_udp_connreset(sock)
-        sock.bind(self._local_address)
+        sock.bind(self._address)
         return sock
 
     async def start(self) -> None:
@@ -183,7 +183,7 @@ class Server:
             sock=sock,
         )
         self._socket = UDPSocket(transport)
-        self._bound_port = self._socket.local_address[1]
+        self._bound_port = self._socket.address[1]
         self._update_task = asyncio.create_task(self._update_loop())
 
     async def serve_forever(self) -> None:
@@ -251,17 +251,31 @@ class Server:
     async def __aexit__(self, *exc: object) -> None:
         await self.close()
 
+    def __repr__(self) -> str:
+        count = len(self._peers)
+        return f"<Server listening={self.address!r} connections={count}/{self._max_connections}>"
+
+    @property
+    def connections(self) -> list[Connection]:
+        """Read-only list of currently connected peers."""
+        return list(self._peers.values())
+
+    @property
+    def connection_count(self) -> int:
+        """Number of currently connected peers."""
+        return len(self._peers)
+
     @property
     def guid(self) -> int:
         """The 64-bit GUID that identifies this server in the RakNet protocol."""
         return self._guid
 
     @property
-    def local_address(self) -> tuple[str, int]:
+    def address(self) -> tuple[str, int]:
         """The actual ``(host, port)`` the server socket is bound to."""
         if self._socket is not None:
-            return self._socket.local_address
-        return self._local_address
+            return self._socket.address
+        return self._address
 
     @property
     def timeout(self) -> float:
@@ -292,6 +306,7 @@ class Server:
         data: bytes,
         reliability: Reliability = Reliability.RELIABLE_ORDERED,
         channel: int = 0,
+        priority: Priority = Priority.MEDIUM,
         *,
         exclude: Connection | None = None,
     ) -> None:
@@ -305,6 +320,7 @@ class Server:
             data: Raw payload bytes.
             reliability: Delivery guarantee.  Defaults to ``RELIABLE_ORDERED``.
             channel: Ordering channel (0–31).
+            priority: Send-queue priority level.
             exclude: If set, skip this connection (e.g. to relay a message
                 to everyone except the sender).
         """
@@ -312,7 +328,7 @@ class Server:
             if conn is exclude:
                 continue
             if conn.state == ConnectionState.CONNECTED:
-                conn._send(data, reliability, channel)
+                conn._send(data, reliability, channel, priority)
 
     # ------------------------------------------------------------------
     # Per-peer disconnect
@@ -539,7 +555,7 @@ class Server:
             num_internal_ids=self._num_internal_ids,
         )
         conn._system_index = len(self._connections)
-        conn._local_port = self._bound_port
+        conn._port = self._bound_port
         conn.remote_guid = guid
         # Set CONNECTING state and handshake timing - previously done by
         # _handle_open_request_1, now skipped since OCR1 is stateless.

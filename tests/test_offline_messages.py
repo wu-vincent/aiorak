@@ -26,7 +26,7 @@ async def test_ping_receives_response(server_factory):
     """A ping to the server returns a valid PingResponse."""
     server = await server_factory()
     server.set_offline_ping_response(CUSTOM_DATA)
-    addr = server.local_address
+    addr = server.address
 
     response = await aiorak.ping(addr, timeout=3.0)
     assert response is not None
@@ -37,7 +37,7 @@ async def test_ping_returns_custom_data(server_factory):
     """The ping response data matches the server's offline ping response."""
     server = await server_factory()
     server.set_offline_ping_response(CUSTOM_DATA)
-    addr = server.local_address
+    addr = server.address
 
     response = await aiorak.ping(addr, timeout=3.0)
     assert response.data == CUSTOM_DATA
@@ -47,7 +47,7 @@ async def test_ping_only_if_open_full_server(server_factory, client_factory):
     """Pinging a full server with only_if_open=True should timeout."""
     server = await server_factory(max_connections=1)
     server.set_offline_ping_response(CUSTOM_DATA)
-    addr = server.local_address
+    addr = server.address
 
     # Fill the single slot
     await client_factory(addr)
@@ -61,7 +61,7 @@ async def test_ping_regardless_of_capacity(server_factory, client_factory):
     """Pinging a full server with only_if_open=False still returns a response."""
     server = await server_factory(max_connections=1)
     server.set_offline_ping_response(CUSTOM_DATA)
-    addr = server.local_address
+    addr = server.address
 
     # Fill the single slot
     await client_factory(addr)

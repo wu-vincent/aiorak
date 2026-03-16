@@ -12,10 +12,10 @@ Quick start
     import aiorak
 
     async def handler(conn: aiorak.Connection):
-        print(f"{conn.address} connected")
+        print(f"{conn.remote_address} connected")
         async for data in conn:
-            await conn.send(data)  # echo
-        print(f"{conn.address} disconnected")
+            conn.send(data)  # echo
+        print(f"{conn.remote_address} disconnected")
 
     server = await aiorak.create_server(('0.0.0.0', 19132), handler)
     await server.serve_forever()
@@ -25,7 +25,7 @@ Quick start
     import aiorak
 
     client = await aiorak.connect(('127.0.0.1', 19132))
-    await client.send(b"hello", reliability=aiorak.Reliability.RELIABLE_ORDERED)
+    client.send(b"hello", reliability=aiorak.Reliability.RELIABLE_ORDERED)
     async for data in client:
         print("Got:", data)
 
@@ -33,8 +33,11 @@ Public API
 ----------
 """
 
+from collections.abc import Awaitable, Callable
+
 from ._client import Client
 from ._connection import Connection
+from ._exceptions import ConnectionClosedError, HandshakeError, ProtocolError, RakNetError
 from ._server import Server
 from ._types import PingResponse, Priority, Reliability
 
@@ -44,9 +47,13 @@ __all__ = [
     "__version__",
     "Client",
     "Connection",
+    "ConnectionClosedError",
+    "HandshakeError",
     "Server",
     "PingResponse",
     "Priority",
+    "ProtocolError",
+    "RakNetError",
     "Reliability",
     "create_server",
     "connect",
@@ -56,7 +63,7 @@ __all__ = [
 
 async def create_server(
     address: tuple[str, int],
-    handler,
+    handler: Callable[[Connection], Awaitable[None]],
     max_connections: int = 64,
     *,
     guid: int | None = None,
@@ -91,7 +98,7 @@ async def create_server(
 
         async def handler(conn):
             async for data in conn:
-                await conn.send(data)
+                conn.send(data)
 
         server = await aiorak.create_server(('0.0.0.0', 19132), handler)
     """
@@ -153,7 +160,7 @@ async def connect(
     Example::
 
         client = await aiorak.connect(('127.0.0.1', 19132))
-        await client.send(b"hello")
+        client.send(b"hello")
     """
     kwargs: dict = {"guid": guid}
     if protocol_version is not None:

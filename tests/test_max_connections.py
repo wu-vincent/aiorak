@@ -24,7 +24,7 @@ async def test_connect_up_to_max(server_factory, client_factory):
     """All clients connect successfully when count == max_connections."""
     max_conn = 4
     server = await server_factory(max_connections=max_conn)
-    addr = server.local_address
+    addr = server.address
 
     clients = []
     for _ in range(max_conn):
@@ -38,7 +38,7 @@ async def test_reject_beyond_max(server_factory, client_factory):
     """A client connecting beyond max_connections is rejected."""
     max_conn = 4
     server = await server_factory(max_connections=max_conn)
-    addr = server.local_address
+    addr = server.address
 
     # Fill all slots
     clients = []

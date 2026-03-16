@@ -16,14 +16,14 @@ def _make_relay_handler():
     connections: dict[tuple[str, int], aiorak.Connection] = {}
 
     async def relay_handler(conn: aiorak.Connection):
-        connections[conn.address] = conn
+        connections[conn.remote_address] = conn
         try:
             async for data in conn:
                 for addr, other in list(connections.items()):
-                    if addr != conn.address:
+                    if addr != conn.remote_address:
                         other.send(data)
         finally:
-            connections.pop(conn.address, None)
+            connections.pop(conn.remote_address, None)
 
     return relay_handler
 
@@ -33,7 +33,7 @@ async def test_relayed_data_arrives(server_factory, client_factory):
     server.  Client B must receive every packet."""
     relay_handler = _make_relay_handler()
     server = await server_factory(handler=relay_handler)
-    addr = server.local_address
+    addr = server.address
 
     sender = await client_factory(addr)
     receiver = await client_factory(addr)
@@ -77,7 +77,7 @@ async def test_variable_packet_sizes(server_factory, client_factory):
     64ms intervals for 500ms.  Verify all packets arrive at the correct size."""
     relay_handler = _make_relay_handler()
     server = await server_factory(handler=relay_handler)
-    addr = server.local_address
+    addr = server.address
 
     sender = await client_factory(addr)
     receiver = await client_factory(addr)

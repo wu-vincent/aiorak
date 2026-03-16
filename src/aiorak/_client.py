@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator
 from ._connection import Connection, ConnectionState, _Signal
 from ._constants import MAXIMUM_MTU, MINIMUM_MTU, NUMBER_OF_INTERNAL_IDS, RAKNET_PROTOCOL_VERSION
 from ._transport import RakNetTransport, UDPSocket
-from ._types import Reliability
+from ._types import Priority, Reliability
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class Client:
     sending and receiving messages.  Always create via :func:`aiorak.connect`.
 
     Args:
-        server_address: ``(host, port)`` of the server to connect to.
+        remote_address: ``(host, port)`` of the server to connect to.
         guid: 64-bit client GUID.  Generated randomly if not supplied.
         protocol_version: RakNet protocol version for handshake validation.
         max_mtu: Largest MTU accepted during handshake.
@@ -44,7 +44,7 @@ class Client:
 
     def __init__(
         self,
-        server_address: tuple[str, int],
+        remote_address: tuple[str, int],
         guid: int | None = None,
         protocol_version: int = RAKNET_PROTOCOL_VERSION,
         max_mtu: int = MAXIMUM_MTU,
@@ -52,7 +52,7 @@ class Client:
         mtu_discovery_sizes: tuple[int, ...] | None = None,
         num_internal_ids: int = NUMBER_OF_INTERNAL_IDS,
     ) -> None:
-        self._server_address = server_address
+        self._remote_address = remote_address
         self._guid = guid if guid is not None else random.getrandbits(64)
         self._protocol_version = protocol_version
         self._max_mtu = max_mtu
@@ -85,14 +85,14 @@ class Client:
         loop = asyncio.get_running_loop()
         transport, _protocol = await loop.create_datagram_endpoint(
             lambda: RakNetTransport(self._on_datagram, self._on_transport_error),
-            remote_addr=self._server_address,
+            remote_addr=self._remote_address,
         )
         self._socket = UDPSocket(transport)
 
         # Use the resolved peer address (IP, port) from the transport so that
         # write_address() in handshake packets gets a dotted-quad IP, not a hostname.
         peer_addr = transport.get_extra_info("peername")
-        resolved_address = (peer_addr[0], peer_addr[1]) if peer_addr else self._server_address
+        resolved_address = (peer_addr[0], peer_addr[1]) if peer_addr else self._remote_address
 
         self._connection = Connection(
             address=resolved_address,
@@ -106,11 +106,11 @@ class Client:
             mtu_discovery_sizes=self._mtu_discovery_sizes,
             num_internal_ids=self._num_internal_ids,
         )
-        self._connection._local_port = self._socket.local_address[1]
+        self._connection._port = self._socket.address[1]
 
         now = _time.monotonic()
         initial_pkt = self._connection.start_connect(now)
-        self._send_raw(initial_pkt, self._server_address)
+        self._send_raw(initial_pkt, self._remote_address)
 
         self._update_task = asyncio.create_task(self._update_loop())
 
@@ -118,7 +118,7 @@ class Client:
         await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
         if self._connect_error is not None:
             raise self._connect_error
-        logger.debug("Connected to %s", self._server_address)
+        logger.debug("Connected to %s", self._remote_address)
 
     async def close(self, *, notify: bool = True) -> None:
         """Disconnect from the server and release resources.
@@ -158,15 +158,28 @@ class Client:
         while self._connection.has_pending_data and self._connection.state == ConnectionState.DISCONNECTING:
             await asyncio.sleep(0.01)
 
+    def __repr__(self) -> str:
+        return f"<Client remote_address={self._remote_address!r} mtu={self.mtu}>"
+
     @property
     def is_connected(self) -> bool:
         """``True`` if the client is fully connected to the server."""
         return self._connection.state == ConnectionState.CONNECTED
 
     @property
-    def local_address(self) -> tuple[str, int]:
+    def address(self) -> tuple[str, int]:
         """The local ``(host, port)`` the client socket is bound to."""
-        return self._socket.local_address
+        return self._socket.address
+
+    @property
+    def remote_address(self) -> tuple[str, int]:
+        """The ``(host, port)`` of the remote server."""
+        return self._remote_address
+
+    @property
+    def guid(self) -> int:
+        """The 64-bit GUID that identifies this client in the RakNet protocol."""
+        return self._guid
 
     @property
     def timeout(self) -> float:
@@ -199,6 +212,7 @@ class Client:
         data: bytes,
         reliability: Reliability = Reliability.RELIABLE_ORDERED,
         channel: int = 0,
+        priority: Priority = Priority.MEDIUM,
     ) -> None:
         """Send a message to the server.
 
@@ -206,11 +220,12 @@ class Client:
             data: Raw payload bytes.
             reliability: Delivery guarantee.
             channel: Ordering channel (0-31).
+            priority: Send-queue priority level.
 
         Raises:
             RuntimeError: If the client is not connected.
         """
-        self._connection._send(data, reliability, channel)
+        self._connection._send(data, reliability, channel, priority)
 
     # ------------------------------------------------------------------
     # Receiving
@@ -250,7 +265,7 @@ class Client:
 
         responses = self._connection.on_datagram(data, now)
         for resp in responses:
-            self._send_raw(resp, self._server_address)
+            self._send_raw(resp, self._remote_address)
 
         # Process signals
         for signal, sig_data in self._connection.poll_events():
@@ -286,7 +301,7 @@ class Client:
                 now = _time.monotonic()
                 datagrams = self._connection.update(now)
                 for dg in datagrams:
-                    self._send_raw(dg, self._server_address)
+                    self._send_raw(dg, self._remote_address)
 
                 # Process signals
                 for signal, sig_data in self._connection.poll_events():
