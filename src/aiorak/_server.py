@@ -260,11 +260,6 @@ class Server:
         return list(self._peers.values())
 
     @property
-    def connection_count(self) -> int:
-        """Number of currently connected peers."""
-        return len(self._peers)
-
-    @property
     def guid(self) -> int:
         """The 64-bit GUID that identifies this server in the RakNet protocol."""
         return self._guid
