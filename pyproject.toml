@@ -34,11 +34,12 @@ Changelog = "https://github.com/wu-vincent/aiorak/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.24",
-    "pytest-cov>=6.0",
-    "pytest-xdist>=3.0",
-    "ruff>=0.9",
+    "pytest>=8.0,<10",
+    "pytest-asyncio>=0.24,<1",
+    "pytest-cov>=6.0,<7",
+    "pytest-xdist>=3.0,<5",
+    "ruff>=0.9,<1",
+    "mypy>=1.0,<2",
 ]
 
 [tool.ruff]
@@ -52,6 +53,13 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "timeout: set a timeout for the test (informational only)",
 ]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = false
 
 [tool.coverage.run]
 source = ["aiorak"]

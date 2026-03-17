@@ -77,6 +77,26 @@ MAX_SPLIT_PACKET_COUNT: int = 65536
 Rejects packets claiming more fragments than this as malformed.
 With a typical MTU of 1400, this allows messages up to ~90 MB."""
 
+MAX_SPLIT_TRACKERS: int = 512
+"""Maximum number of concurrent split reassembly sessions per connection.
+Prevents a malicious peer from exhausting memory with incomplete splits."""
+
+MAX_ORDERING_HEAP_SIZE: int = 8192
+"""Maximum buffered out-of-order messages per ordering channel.
+Prevents memory exhaustion from a peer that withholds expected indices."""
+
+MAX_RECEIVE_QUEUE_SIZE: int = 16384
+"""Maximum pending messages in the receive queue before new frames are dropped.
+Protects against memory exhaustion when the application is slow to consume."""
+
+MAX_RESEND_BUFFER_SIZE: int = 4096
+"""Maximum reliable messages awaiting acknowledgment before new sends are blocked.
+Prevents unbounded growth when a peer stops sending ACKs."""
+
+MAX_DATAGRAM_HISTORY_SIZE: int = 4096
+"""Maximum sent datagrams tracked for ACK/NAK processing.
+Old entries are evicted when this limit is reached."""
+
 # ---------------------------------------------------------------------------
 # Sequence number space - 24-bit unsigned integers
 # ---------------------------------------------------------------------------
@@ -89,6 +109,15 @@ SEQ_NUM_MAX: int = 0xFFFFFF
 # ---------------------------------------------------------------------------
 DEFAULT_TIMEOUT: float = 10.0
 """Seconds of silence before a connection is considered lost."""
+
+PING_INTERVAL: float = 5.0
+"""Seconds between connected keepalive pings."""
+
+HANDSHAKE_RETRANSMIT_INTERVAL: float = 1.0
+"""Seconds between retransmissions of the handshake packet."""
+
+HANDSHAKE_RETRANSMIT_COUNT: int = 3
+"""Number of retransmissions per MTU size before trying the next size."""
 
 SYN_INTERVAL: float = 0.010
 """Base tick interval (10 ms) used by the congestion controller and the

@@ -14,7 +14,12 @@ from ._constants import (
     DATAGRAM_MESSAGE_ID_ARRAY_LENGTH,
     DEFAULT_RECEIVED_PACKET_QUEUE_SIZE,
     DEFAULT_TIMEOUT,
+    MAX_DATAGRAM_HISTORY_SIZE,
+    MAX_ORDERING_HEAP_SIZE,
+    MAX_RECEIVE_QUEUE_SIZE,
+    MAX_RESEND_BUFFER_SIZE,
     MAX_SPLIT_PACKET_COUNT,
+    MAX_SPLIT_TRACKERS,
     NUMBER_OF_ORDERED_STREAMS,
     SEQ_NUM_MAX,
     UDP_HEADER_SIZE,
@@ -235,9 +240,6 @@ class ReliabilityLayer:
         # Track last reliable send time for keepalive (C++ lastReliableSend)
         self._last_reliable_send: float = 0.0
 
-        # Unreliable message timeout for queue culling (C++ unreliableTimeout)
-        self._unreliable_timeout: float = 0.0
-
     def _init_priority_weights(self) -> None:
         """Initialize priority heap weights matching C++ InitHeapWeights.
 
@@ -335,6 +337,11 @@ class ReliabilityLayer:
             return self._receive_queue.pop(0)
         return None
 
+    def _deliver(self, data: bytes, channel: int) -> None:
+        """Append a completed message to the receive queue if not full."""
+        if len(self._receive_queue) < MAX_RECEIVE_QUEUE_SIZE:
+            self._receive_queue.append((data, channel))
+
     # ------------------------------------------------------------------
     # Periodic update - build & send datagrams
     # ------------------------------------------------------------------
@@ -374,19 +381,6 @@ class ReliabilityLayer:
         for seq in stale_dg:
             rec = self._datagram_history.pop(seq)
             self._unacked_bytes -= rec.byte_size
-
-        # 5b. Cull stale unreliable messages from send queue (C++ unreliableTimeout)
-        if self._unreliable_timeout > 0 and self._send_queue:
-            kept: list[tuple[int, int, MessageFrame]] = []
-            for entry in self._send_queue:
-                frame = entry[2]
-                if not frame.reliability.is_reliable and hasattr(frame, "_creation_time"):
-                    if now - frame._creation_time > self._unreliable_timeout:
-                        continue
-                kept.append(entry)
-            if len(kept) != len(self._send_queue):
-                self._send_queue = kept
-                heapq.heapify(self._send_queue)
 
         # 6. Build datagrams
         # C++ DatagramHeaderFormat::GetDataHeaderByteLength() = 2 + 3 + sizeof(float) = 9
@@ -459,6 +453,12 @@ class ReliabilityLayer:
             seq = self._cc.get_and_increment_seq()
             raw = encode_datagram(seq, frames_for_dg, is_continuous_send=is_continuous)
 
+            # Evict oldest datagram history entry if at capacity
+            if len(self._datagram_history) >= MAX_DATAGRAM_HISTORY_SIZE:
+                oldest_seq = min(self._datagram_history, key=lambda s: self._datagram_history[s].send_time)
+                rec = self._datagram_history.pop(oldest_seq)
+                self._unacked_bytes -= rec.byte_size
+
             # Record datagram history
             self._datagram_history[seq] = _DatagramRecord(
                 seq=seq,
@@ -480,7 +480,7 @@ class ReliabilityLayer:
                         existing.next_action_time = now + rto * (2 ** min(existing.times_sent, 5))
                         existing.retransmission_time = rto
                         existing.times_sent += 1
-                    else:
+                    elif len(self._resend_buffer) < MAX_RESEND_BUFFER_SIZE:
                         # New message
                         self._resend_buffer[rmn] = _InFlightMessage(
                             reliable_message_number=rmn,
@@ -506,11 +506,15 @@ class ReliabilityLayer:
         datagram, and passes the stored ``is_continuous_send`` to the congestion
         controller instead of reading stale state.
         """
+        total_processed = 0
         for lo, hi in ranges:
             count = ((hi - lo) & SEQ_NUM_MAX) + 1
             count = min(count, DATAGRAM_MESSAGE_ID_ARRAY_LENGTH)
             seq = lo
             for _ in range(count):
+                if total_processed >= DATAGRAM_MESSAGE_ID_ARRAY_LENGTH:
+                    return
+                total_processed += 1
                 rec = self._datagram_history.pop(seq, None)
                 if rec is not None:
                     rtt = now - rec.send_time
@@ -529,11 +533,15 @@ class ReliabilityLayer:
         remain for proper congestion controller bookkeeping (C++
         ReliabilityLayer.cpp:831-856).
         """
+        total_processed = 0
         for lo, hi in ranges:
             count = ((hi - lo) & SEQ_NUM_MAX) + 1
             count = min(count, DATAGRAM_MESSAGE_ID_ARRAY_LENGTH)
             seq = lo
             for _ in range(count):
+                if total_processed >= DATAGRAM_MESSAGE_ID_ARRAY_LENGTH:
+                    return
+                total_processed += 1
                 rec = self._datagram_history.get(seq)
                 if rec is not None:
                     self._cc.on_nak()
@@ -625,24 +633,27 @@ class ReliabilityLayer:
                     self._highest_sequenced[ch] & SEQ_NUM_MAX,
                 ):
                     self._highest_sequenced[ch] = frame.sequencing_index
-                    self._receive_queue.append((frame.data, ch))
+                    self._deliver(frame.data, ch)
                 # else: stale sequencing index, drop
             elif seq_greater_than(
                 frame.ordering_index & SEQ_NUM_MAX,
                 self._expected_ordering_index[ch] & SEQ_NUM_MAX,
             ):
-                # Future ordering slot - buffer in ordering heap
-                self._heap_counter += 1
-                heapq.heappush(
-                    self._ordering_heaps[ch],
-                    (frame.ordering_index, frame.sequencing_index, self._heap_counter, False, frame.data),
-                )
+                # Future ordering slot - buffer in ordering heap (bounded)
+                if len(self._ordering_heaps[ch]) < MAX_ORDERING_HEAP_SIZE:
+                    self._heap_counter += 1
+                    heapq.heappush(
+                        self._ordering_heaps[ch],
+                        (frame.ordering_index, frame.sequencing_index, self._heap_counter, False, frame.data),
+                    )
+                else:
+                    logger.warning("Ordering heap channel %d full, dropping frame", ch)
             # else: stale ordering index, drop
 
         elif rel.is_ordered:
             # RELIABLE_ORDERED (and RELIABLE_ORDERED_WITH_ACK_RECEIPT on wire)
             if frame.ordering_index == self._expected_ordering_index[ch]:
-                self._receive_queue.append((frame.data, ch))
+                self._deliver(frame.data, ch)
                 self._expected_ordering_index[ch] = (self._expected_ordering_index[ch] + 1) & SEQ_NUM_MAX
                 self._highest_sequenced[ch] = -1
                 self._flush_ordering_heap(ch)
@@ -650,16 +661,19 @@ class ReliabilityLayer:
                 frame.ordering_index & SEQ_NUM_MAX,
                 self._expected_ordering_index[ch] & SEQ_NUM_MAX,
             ):
-                self._heap_counter += 1
-                heapq.heappush(
-                    self._ordering_heaps[ch],
-                    (frame.ordering_index, _ORDERED_SUBKEY, self._heap_counter, True, frame.data),
-                )
+                if len(self._ordering_heaps[ch]) < MAX_ORDERING_HEAP_SIZE:
+                    self._heap_counter += 1
+                    heapq.heappush(
+                        self._ordering_heaps[ch],
+                        (frame.ordering_index, _ORDERED_SUBKEY, self._heap_counter, True, frame.data),
+                    )
+                else:
+                    logger.warning("Ordering heap channel %d full, dropping frame", ch)
             # else: stale ordering index, silently drop
 
         else:
             # UNRELIABLE, RELIABLE, *_WITH_ACK_RECEIPT - deliver directly
-            self._receive_queue.append((frame.data, ch))
+            self._deliver(frame.data, ch)
 
     def _flush_ordering_heap(self, channel: int) -> None:
         """Deliver buffered ordered/sequenced messages that are now sequential.
@@ -672,7 +686,7 @@ class ReliabilityLayer:
         heap = self._ordering_heaps[channel]
         while heap and heap[0][0] == self._expected_ordering_index[channel]:
             _oi, _sub, _cnt, is_ordered, data = heapq.heappop(heap)
-            self._receive_queue.append((data, channel))
+            self._deliver(data, channel)
             if is_ordered:
                 self._expected_ordering_index[channel] = (self._expected_ordering_index[channel] + 1) & SEQ_NUM_MAX
                 self._highest_sequenced[channel] = -1
@@ -693,10 +707,14 @@ class ReliabilityLayer:
         if tracker is None:
             stale = [k for k, t in self._split_trackers.items() if now - t.last_update_time > self._timeout]
             for k in stale:
-                logger.warning(
-                    "Evicting stale split tracker id=%d (%.1fs old)", k, now - self._split_trackers[k].last_update_time
-                )
+                logger.warning("Evicting stale split tracker id=%d", k)
                 del self._split_trackers[k]
+
+            # Enforce hard limit on concurrent split reassembly sessions
+            if len(self._split_trackers) >= MAX_SPLIT_TRACKERS:
+                oldest_key = min(self._split_trackers, key=lambda k: self._split_trackers[k].last_update_time)
+                logger.warning("Split tracker limit reached, evicting id=%d", oldest_key)
+                del self._split_trackers[oldest_key]
 
             tracker = _SplitTracker(
                 total=frame.split_packet_count,
@@ -707,11 +725,21 @@ class ReliabilityLayer:
             )
             self._split_trackers[sid] = tracker
 
+        # Defense-in-depth: reject out-of-range indices even though
+        # _wire.py already validates split_index < split_count on decode.
+        if frame.split_packet_index >= tracker.total:
+            return None
+
         tracker.received[frame.split_packet_index] = frame.data
         tracker.last_update_time = now
 
         if len(tracker.received) < tracker.total:
             return None
+
+        # Verify all indices 0..N-1 are present before reassembly
+        for i in range(tracker.total):
+            if i not in tracker.received:
+                return None
 
         logger.debug("Split reassembly complete: id=%d, %d fragments", sid, tracker.total)
         parts = [tracker.received[i] for i in range(tracker.total)]
@@ -779,8 +807,8 @@ class ReliabilityLayer:
 
         Reliability has already been upgraded by the caller if needed.
         """
-        split_id = self._next_split_id & 0xFFFF
-        self._next_split_id += 1
+        split_id = self._next_split_id
+        self._next_split_id = (self._next_split_id + 1) & 0xFFFF
 
         fragments: list[bytes] = []
         offset = 0

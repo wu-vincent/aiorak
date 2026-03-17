@@ -34,9 +34,10 @@ Public API
 """
 
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from ._client import Client
-from ._connection import Connection
+from ._connection import Connection, ConnectionState
 from ._exceptions import (
     ConnectionClosedError,
     ConnectionRejectedError,
@@ -54,6 +55,7 @@ __all__ = [
     "__version__",
     "Client",
     "Connection",
+    "ConnectionState",
     "ConnectionClosedError",
     "ConnectionRejectedError",
     "HandshakeError",
@@ -111,7 +113,7 @@ async def create_server(
 
         server = await aiorak.create_server(('0.0.0.0', 19132), handler)
     """
-    kwargs: dict = {
+    kwargs: dict[str, Any] = {
         "max_connections": max_connections,
         "guid": guid,
         "rate_limit_ips": rate_limit_ips,
@@ -173,7 +175,7 @@ async def connect(
         client = await aiorak.connect(('127.0.0.1', 19132))
         client.send(b"hello")
     """
-    kwargs: dict = {"guid": guid}
+    kwargs: dict[str, Any] = {"guid": guid}
     if protocol_version is not None:
         kwargs["protocol_version"] = protocol_version
     if max_mtu is not None:
@@ -265,9 +267,9 @@ async def ping(
         lambda: RakNetTransport(on_datagram),
         remote_addr=address,
     )
-    socket = UDPSocket(transport)
-
     try:
+        socket = UDPSocket(transport)
+
         # Build unconnected ping packet
         msg_id = ID_UNCONNECTED_PING_OPEN_CONNECTIONS if only_if_open else ID_UNCONNECTED_PING
         bs = BitStream()
@@ -288,4 +290,4 @@ async def ping(
         finally:
             timeout_handle.cancel()
     finally:
-        socket.close()
+        transport.close()

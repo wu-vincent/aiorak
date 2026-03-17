@@ -328,7 +328,7 @@ class BitStream:
         idx = self._read_bit_pos >> 3
         (val,) = struct.unpack_from(">H", self._buf, idx)
         self._read_bit_pos += 16
-        return val
+        return int(val)
 
     def read_uint24(self) -> int:
         """Read a 24-bit unsigned integer (little-endian)."""
@@ -348,7 +348,7 @@ class BitStream:
         idx = self._read_bit_pos >> 3
         (val,) = struct.unpack_from(">I", self._buf, idx)
         self._read_bit_pos += 32
-        return val
+        return int(val)
 
     def read_uint64(self) -> int:
         """Read a 64-bit unsigned integer (big-endian, matching C++ BitStream)."""
@@ -358,7 +358,7 @@ class BitStream:
         idx = self._read_bit_pos >> 3
         (val,) = struct.unpack_from(">Q", self._buf, idx)
         self._read_bit_pos += 64
-        return val
+        return int(val)
 
     def read_int64(self) -> int:
         """Read a 64-bit signed integer (big-endian, matching C++ BitStream)."""
@@ -368,7 +368,7 @@ class BitStream:
         idx = self._read_bit_pos >> 3
         (val,) = struct.unpack_from(">q", self._buf, idx)
         self._read_bit_pos += 64
-        return val
+        return int(val)
 
     # ------------------------------------------------------------------
     # Raw byte I/O

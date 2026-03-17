@@ -580,9 +580,9 @@ class Server:
                 self._connections.pop(addr, None)
                 self._handler_tasks.pop(addr, None)
             elif signal == _Signal.RECEIVE:
-                conn = self._peers.get(addr)
-                if conn is not None:
-                    conn._feed_data(data)
+                peer = self._peers.get(addr)
+                if peer is not None:
+                    peer._feed_data(data)
 
     async def _run_handler(self, addr: tuple[str, int], conn: Connection) -> None:
         """Run the user's handler coroutine for a peer."""

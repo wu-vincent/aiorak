@@ -24,6 +24,8 @@ from ._bitstream import BitStream
 from ._congestion import CongestionController
 from ._constants import (
     DEFAULT_TIMEOUT,
+    HANDSHAKE_RETRANSMIT_COUNT,
+    HANDSHAKE_RETRANSMIT_INTERVAL,
     ID_ALREADY_CONNECTED,
     ID_CONNECTED_PING,
     ID_CONNECTED_PONG,
@@ -46,6 +48,7 @@ from ._constants import (
     MINIMUM_MTU,
     NUMBER_OF_INTERNAL_IDS,
     OFFLINE_MAGIC,
+    PING_INTERVAL,
     RAKNET_PROTOCOL_VERSION,
     UDP_HEADER_SIZE,
 )
@@ -67,7 +70,7 @@ def _get_local_addresses() -> list[str]:
         seen: set[str] = set()
         addrs: list[str] = []
         for info in infos:
-            ip = info[4][0]
+            ip = str(info[4][0])
             if ip not in seen:
                 seen.add(ip)
                 addrs.append(ip)
@@ -155,7 +158,7 @@ class Connection:
 
         self._last_recv_time: float = 0.0
         self._last_ping_time: float = 0.0
-        self._ping_interval: float = 5.0
+        self._ping_interval: float = PING_INTERVAL
         self._disconnect_on_ack_sent: bool = False
         self._last_reliable_send_time: float = 0.0
 
@@ -317,9 +320,9 @@ class Connection:
                 msg = self._reliability.poll_receive()
                 if msg is None:
                     break
-                resp = self._handle_connected_message(msg[0], now)
-                if resp is not None:
-                    outgoing.extend(resp)
+                replies = self._handle_connected_message(msg[0], now)
+                if replies is not None:
+                    outgoing.extend(replies)
 
         return outgoing
 
@@ -359,10 +362,10 @@ class Connection:
         if (
             self.state == ConnectionState.CONNECTING
             and not self.is_server
-            and now - self._handshake_retransmit_time > 1.0
+            and now - self._handshake_retransmit_time > HANDSHAKE_RETRANSMIT_INTERVAL
         ):
             self._handshake_retransmit_count += 1
-            if self._handshake_retransmit_count >= 3:
+            if self._handshake_retransmit_count >= HANDSHAKE_RETRANSMIT_COUNT:
                 self._mtu_attempt_index += 1
                 self._handshake_retransmit_count = 0
             pkt = self._build_open_request_1(now)
@@ -426,7 +429,9 @@ class Connection:
         self._mtu_attempt_index = 0
         self._handshake_retransmit_count = 0
         self._handshake_retransmit_time = now
-        return self._build_open_request_1(now)
+        pkt = self._build_open_request_1(now)
+        assert pkt is not None, "First MTU attempt should always succeed"
+        return pkt
 
     def _build_open_request_1(self, now: float) -> bytes | None:
         """Build an ``ID_OPEN_CONNECTION_REQUEST_1`` packet.
